@@ -14,10 +14,10 @@ import argparse
 import configparser
 import datetime as dt
 import inspect
+import io
 import json
 import logging
 import os
-import re
 import subprocess
 import sys
 import threading
@@ -193,7 +193,24 @@ def ovf_disk_boot_order(root, disk_id):
 
 
 def sanitize_ovf(ovf_path, target_name):
-    root = ET.fromstring(ovf_path.read_bytes())
+    data = ovf_path.read_bytes()
+
+    # Preserve the original namespace prefixes. This matters because OVF
+    # contains QName values such as xsi:type="ovf:VirtualSystem_Type".
+    # ElementTree otherwise may serialize the namespace as ns0 while leaving
+    # the QName value unchanged.
+    seen_namespaces = set()
+    for _event, ns in ET.iterparse(
+        io.BytesIO(data), events=("start-ns",)
+    ):
+        prefix, uri = ns
+        key = (prefix or "", uri)
+        if key in seen_namespaces:
+            continue
+        seen_namespaces.add(key)
+        ET.register_namespace(prefix or "", uri)
+
+    root = ET.fromstring(data)
 
     boot_orders = {}
     disk_ids = []
