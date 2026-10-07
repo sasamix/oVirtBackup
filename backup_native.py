@@ -153,6 +153,25 @@ def find_vm(vms_service, name):
     return exact[0]
 
 
+def collect_nics(vm_service):
+    result = []
+    for nic in vm_service.nics_service().list():
+        mac = getattr(getattr(nic, "mac", None), "address", None)
+        profile = getattr(nic, "vnic_profile", None)
+        result.append({
+            "id": getattr(nic, "id", None),
+            "name": getattr(nic, "name", None),
+            "mac": mac,
+            "interface": str(getattr(nic, "interface", None))
+            if getattr(nic, "interface", None) is not None else None,
+            "plugged": getattr(nic, "plugged", None),
+            "linked": getattr(nic, "linked", None),
+            "vnic_profile_id": getattr(profile, "id", None) if profile else None,
+            "vnic_profile_name": getattr(profile, "name", None) if profile else None,
+        })
+    return result
+
+
 def select_disks(system, vm_service, cp):
     bootable_only = cp.getboolean("config", "bootable_only", fallback=False)
     include_inactive = cp.getboolean(
@@ -643,6 +662,7 @@ def backup_vm(connection, base, vm_name, cp, dry_run):
         "vm_id": vm.id,
         "created_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
         "selected_disks": disk_meta,
+        "nics": collect_nics(vm_service),
         "files": [],
     }
     write_manifest(work / "manifest.json", manifest)
