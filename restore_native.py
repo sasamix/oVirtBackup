@@ -720,7 +720,11 @@ def main():
             )
 
         if args.network_mode != "none":
-            profiles_service = system.vnic_profiles_service()
+            profiles = {
+                profile.id: profile
+                for profile in system.vnic_profiles_service().list()
+            }
+
             for index, meta in enumerate(nic_meta, start=1):
                 nic_name = meta.get("name") or ("nic%d" % index)
                 mac = meta.get("mac")
@@ -735,13 +739,8 @@ def main():
                         "NIC %s has no saved vNIC profile id" % nic_name
                     )
 
-                try:
-                    profile = (
-                        profiles_service
-                        .vnic_profile_service(profile_id)
-                        .get()
-                    )
-                except sdk.NotFoundError:
+                profile = profiles.get(profile_id)
+                if profile is None:
                     raise RuntimeError(
                         "Saved vNIC profile %s for NIC %s no longer exists"
                         % (profile_id, nic_name)
@@ -1072,10 +1071,15 @@ def main():
         return 0
 
     except Exception:
-        LOG.exception(
-            "Restore failed. Created resources are intentionally kept "
-            "for diagnosis; use restore state JSON for cleanup."
-        )
+        if args.execute:
+            LOG.exception(
+                "Restore failed. Created resources are intentionally kept "
+                "for diagnosis; use restore state JSON for cleanup."
+            )
+        else:
+            LOG.exception(
+                "Restore preflight failed; no restore resources were created."
+            )
         return 1
     finally:
         connection.close()
