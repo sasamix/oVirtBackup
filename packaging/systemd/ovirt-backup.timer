@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily oVirt Native VM Backup
+
+[Timer]
+OnCalendar=*-*-* 02:00:00
+Persistent=true
+RandomizedDelaySec=0
+Unit=ovirt-backup.service
+
+[Install]
+WantedBy=timers.target
