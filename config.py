@@ -50,9 +50,9 @@ class Config(object):
             self.__backup_keep_count = config_parser.get(section, "backup_keep_count")
             self.__backup_keep_count_by_number = config_parser.get(section, "backup_keep_count_by_number")
             self.__dry_run = config_parser.getboolean(section, "dry_run")
-            self.__bootable_only = config_parser.getboolean(section, "bootable_only")
-            self.__with_disks_deactivated = config_parser.getboolean(section, "with_disks_deactivated")
-            self.__disks_id_exclude = json.loads(config_parser.get(section, "disks_id_exclude"))
+            self.__bootable_only = config_parser.getboolean(section, "bootable_only", fallback=False)
+            self.__with_disks_deactivated = config_parser.getboolean(section, "with_disks_deactivated", fallback=False)
+            self.__disks_id_exclude = json.loads(config_parser.get(section, "disks_id_exclude", fallback="[]"))
             self.__debug = debug
             self.__vm_name_max_length = config_parser.getint(section, "vm_name_max_length")
             self.__use_short_suffix = config_parser.getboolean(section, "use_short_suffix")
