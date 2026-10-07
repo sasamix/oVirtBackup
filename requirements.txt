@@ -1,2 +1,5 @@
-argparse; python_version < '2.7'
-ovirt-engine-sdk-python => 4.4
+# Python SDK dependency for native VM Backup API.
+ovirt-engine-sdk-python>=4.5
+
+# ovirt-imageio-client is expected from the operating system RPM on oVirt
+# Engine hosts (package: ovirt-imageio-client). It provides ovirt_imageio.
