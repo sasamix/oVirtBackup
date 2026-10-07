@@ -613,6 +613,15 @@ def main():
     parser.add_argument("--cluster")
     parser.add_argument("--storage-domain")
     parser.add_argument(
+        "--network-mode",
+        choices=("none", "isolated", "original"),
+        default="none",
+        help=(
+            "none: no NICs; isolated: restore NICs with new MACs and link down; "
+            "original: restore original MAC/profile for disaster recovery"
+        ),
+    )
+    parser.add_argument(
         "--execute",
         action="store_true",
         help="Perform restore. Without this flag only preflight is run.",
@@ -644,6 +653,7 @@ def main():
     LOG.info("Target VM: %s", target_name)
     LOG.info("Target cluster: %s", cluster_name)
     LOG.info("Target storage domain: %s", storage_name)
+    LOG.info("Network mode: %s", args.network_mode)
     LOG.info(
         "Sanitized OVF: removed references=%d sections=%d hardware_items=%d",
         ovf_meta["removed_references"],
@@ -700,10 +710,39 @@ def main():
                     "Not enough space on storage domain %s" % storage_name
                 )
 
+        nic_meta = manifest.get("nics") or []
+
+        if args.network_mode != "none" and not nic_meta:
+            raise RuntimeError(
+                "Backup manifest contains no NIC metadata. "
+                "Backfill NIC metadata before using network mode %s."
+                % args.network_mode
+            )
+
+        if args.network_mode == "original":
+            source_vm_id = manifest.get("vm_id")
+            source_vm_exists = False
+            if source_vm_id:
+                try:
+                    current_source = vms_service.vm_service(source_vm_id).get()
+                    source_vm_exists = current_source is not None
+                except sdk.NotFoundError:
+                    source_vm_exists = False
+
+            if source_vm_exists:
+                raise RuntimeError(
+                    "network-mode=original is unsafe while source VM still "
+                    "exists in this Engine: duplicate MAC addresses may be "
+                    "rejected or later collide. Use none/isolated for a test "
+                    "restore, or original only for real DR after the source "
+                    "VM is absent."
+                )
+
         LOG.info(
-            "Preflight OK: VM absent, cluster=%s, storage=%s",
+            "Preflight OK: VM absent, cluster=%s, storage=%s, NICs=%d",
             cluster.id,
             storage.id,
+            len(nic_meta),
         )
 
         if not args.execute:
@@ -736,9 +775,11 @@ def main():
             "storage_domain_name": storage_name,
             "storage_domain_id": storage.id,
             "sanitized_ovf": str(sanitized_path),
+            "network_mode": args.network_mode,
             "network_interfaces_restored": False,
             "vm_started": False,
             "created_disks": [],
+            "created_nics": [],
         }
         write_state(state_path, state)
         LOG.info("Restore state: %s", state_path)
@@ -765,12 +806,87 @@ def main():
             cp.getint("config", "backup_operation_timeout", fallback=3600),
         )
 
-        nics = vm_service.nics_service().list()
+        nics_service = vm_service.nics_service()
+        nics = nics_service.list()
         for nic in nics:
             LOG.warning(
                 "Removing unexpected NIC %s from restored VM", nic.id
             )
-            vm_service.nics_service().nic_service(nic.id).remove()
+            nics_service.nic_service(nic.id).remove()
+
+        if args.network_mode != "none":
+            for index, meta in enumerate(nic_meta, start=1):
+                profile_id = meta.get("vnic_profile_id")
+                if not profile_id:
+                    raise RuntimeError(
+                        "NIC %s has no vNIC profile id"
+                        % (meta.get("name") or index)
+                    )
+
+                kwargs = {
+                    "name": meta.get("name") or ("nic%d" % index),
+                    "vnic_profile": types.VnicProfile(id=profile_id),
+                    "plugged": bool(
+                        meta.get("plugged")
+                        if meta.get("plugged") is not None else True
+                    ),
+                }
+
+                interface = meta.get("interface")
+                if interface:
+                    kwargs["interface"] = types.NicInterface(
+                        interface.lower()
+                    )
+
+                if args.network_mode == "original":
+                    mac = meta.get("mac")
+                    if not mac:
+                        raise RuntimeError(
+                            "NIC %s has no saved MAC"
+                            % kwargs["name"]
+                        )
+                    kwargs["mac"] = types.Mac(address=mac)
+                    kwargs["linked"] = bool(
+                        meta.get("linked")
+                        if meta.get("linked") is not None else True
+                    )
+                else:
+                    # Isolated test restore: let Engine allocate a new MAC but
+                    # keep the original profile and device type. Link is down
+                    # even if an operator later starts the VM manually.
+                    kwargs["linked"] = False
+
+                created_nic = nics_service.add(types.Nic(**kwargs))
+                created_meta = {
+                    "id": created_nic.id,
+                    "name": created_nic.name,
+                    "source_mac": meta.get("mac"),
+                    "restored_mac": getattr(
+                        getattr(created_nic, "mac", None), "address", None
+                    ),
+                    "vnic_profile_id": profile_id,
+                    "interface": str(
+                        getattr(created_nic, "interface", None)
+                    ) if getattr(created_nic, "interface", None) else interface,
+                    "plugged": getattr(created_nic, "plugged", None),
+                    "linked": getattr(created_nic, "linked", None),
+                }
+                state["created_nics"].append(created_meta)
+                write_state(state_path, state)
+                LOG.info(
+                    "Created NIC %s mode=%s source_mac=%s restored_mac=%s "
+                    "profile=%s linked=%s plugged=%s",
+                    created_meta["name"],
+                    args.network_mode,
+                    created_meta["source_mac"],
+                    created_meta["restored_mac"],
+                    profile_id,
+                    created_meta["linked"],
+                    created_meta["plugged"],
+                )
+
+            state["network_interfaces_restored"] = True
+            write_state(state_path, state)
 
         for item in disks:
             meta = item["metadata"]
@@ -864,9 +980,11 @@ def main():
         final_nics = vm_service.nics_service().list()
         attachments = vm_service.disk_attachments_service().list()
 
-        if final_nics:
+        expected_nics = 0 if args.network_mode == "none" else len(nic_meta)
+        if len(final_nics) != expected_nics:
             raise RuntimeError(
-                "Restored VM unexpectedly has %d NIC(s)" % len(final_nics)
+                "Restored VM has %d NIC(s), expected %d"
+                % (len(final_nics), expected_nics)
             )
 
         restored_ids = {d["target_disk_id"] for d in state["created_disks"]}
@@ -885,11 +1003,13 @@ def main():
         write_state(state_path, state)
 
         LOG.info(
-            "Restore complete: VM %s (%s) status=%s, NICs=0. "
-            "VM was NOT started.",
+            "Restore complete: VM %s (%s) status=%s, NICs=%d, "
+            "network_mode=%s. VM was NOT started.",
             target_name,
             final_vm.id,
             final_vm.status,
+            len(final_nics),
+            args.network_mode,
         )
         LOG.info("Restore state saved: %s", state_path)
         return 0
