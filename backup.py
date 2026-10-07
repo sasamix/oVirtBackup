@@ -336,7 +336,8 @@ def main(argv):
             VMTools.check_storage_domain_status(
                 api,
                 config.get_datacenter_name(),
-                config.get_export_domain()
+                config.get_export_domain(),
+                retry_delay=config.get_timeout()
             )
             # Cleanup: Delete the cloned VM
             VMTools.delete_vm(api, config, vm_from_list)
