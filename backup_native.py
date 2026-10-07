@@ -16,6 +16,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -254,9 +255,16 @@ def wait_backup(backup_service, backup, wanted, timeout):
     return backup
 
 
+def _extract_ovf(source):
+    try:
+        return source.initialization.configuration.data
+    except (AttributeError, TypeError):
+        return None
+
+
 def save_ovf(vm_service, backup, target):
-    source = None
     snapshot_id = getattr(getattr(backup, "snapshot", None), "id", None)
+    ovf = None
 
     if snapshot_id:
         try:
@@ -265,27 +273,120 @@ def save_ovf(vm_service, backup, target):
                 .snapshot_service(snapshot_id)
                 .get(all_content=True)
             )
+            ovf = _extract_ovf(source)
+            if ovf:
+                LOG.info("Using OVF from backup snapshot %s", snapshot_id)
+            else:
+                LOG.warning(
+                    "Backup snapshot %s returned no OVF; "
+                    "falling back to current VM OVF",
+                    snapshot_id,
+                )
         except Exception:
             LOG.exception(
                 "Cannot read backup snapshot OVF; falling back to current VM OVF"
             )
 
-    if source is None:
-        source = vm_service.get(all_content=True)
+    if not ovf:
+        kwargs = {"all_content": True}
+        try:
+            if "ovf_as_ova" in inspect.signature(vm_service.get).parameters:
+                kwargs["ovf_as_ova"] = True
+        except (TypeError, ValueError):
+            pass
 
-    try:
-        ovf = source.initialization.configuration.data
-    except (AttributeError, TypeError):
-        ovf = None
+        try:
+            source = vm_service.get(**kwargs)
+        except TypeError:
+            source = vm_service.get(all_content=True)
+
+        ovf = _extract_ovf(source)
 
     if not ovf:
-        LOG.warning("Engine returned no OVF data")
+        LOG.warning("Engine returned no OVF data from snapshot or current VM")
         return snapshot_id, False
 
     data = ovf if isinstance(ovf, bytes) else str(ovf).encode("utf-8")
     with open(target, "wb") as fh:
         fh.write(data)
+        fh.flush()
+        os.fsync(fh.fileno())
+
+    LOG.info("Saved VM OVF: %s (%d bytes)", target, len(data))
     return snapshot_id, True
+
+
+class LogProgress:
+    def __init__(self, disk_id, interval=10, percent_step=5):
+        self.disk_id = disk_id
+        self.interval = max(1, int(interval))
+        self.percent_step = max(1, int(percent_step))
+        self._size = None
+        self._done = 0
+        self._started = time.monotonic()
+        self._last_log = self._started
+        self._last_percent = -self.percent_step
+        self._lock = threading.Lock()
+
+    @property
+    def size(self):
+        return self._size
+
+    @size.setter
+    def size(self, value):
+        with self._lock:
+            self._size = value
+            if value:
+                LOG.info(
+                    "Download size for disk %s: %.2f GiB",
+                    self.disk_id,
+                    value / 1024**3,
+                )
+
+    def update(self, amount):
+        with self._lock:
+            self._done += amount
+            now = time.monotonic()
+            elapsed = max(now - self._started, 0.001)
+            rate = self._done / elapsed
+
+            percent = None
+            if self._size:
+                percent = min(100.0, self._done * 100.0 / self._size)
+
+            due_time = now - self._last_log >= self.interval
+            due_percent = (
+                percent is not None
+                and percent >= self._last_percent + self.percent_step
+            )
+            finished = percent is not None and percent >= 100.0
+
+            if not (due_time or due_percent or finished):
+                return
+
+            if self._size:
+                remaining = max(self._size - self._done, 0)
+                eta = remaining / rate if rate > 0 else 0
+                LOG.info(
+                    "Download progress disk %s: %.1f%%, %.2f/%.2f GiB, "
+                    "%.1f MiB/s, ETA %ds",
+                    self.disk_id,
+                    percent,
+                    self._done / 1024**3,
+                    self._size / 1024**3,
+                    rate / 1024**2,
+                    int(eta),
+                )
+                self._last_percent = int(percent // self.percent_step) * self.percent_step
+            else:
+                LOG.info(
+                    "Download progress disk %s: %.2f GiB, %.1f MiB/s",
+                    self.disk_id,
+                    self._done / 1024**3,
+                    rate / 1024**2,
+                )
+
+            self._last_log = now
 
 
 def create_transfer(connection, backup_id, disk_id, cp):
@@ -386,6 +487,7 @@ def download_disk(connection, backup, disk, disk_dir, cp):
     disk_id = disk.id
     target = disk_dir / ("%s.qcow2" % disk_id)
     transfer = create_transfer(connection, backup.id, disk_id, cp)
+    download_started = time.monotonic()
 
     try:
         kwargs = {
@@ -396,8 +498,19 @@ def download_disk(connection, backup, disk, disk_dir, cp):
                 "config", "imageio_max_workers", fallback=4
             ),
         }
-        if "proxy_url" in inspect.signature(imageio_client.download).parameters:
+        signature = inspect.signature(imageio_client.download)
+        if "proxy_url" in signature.parameters:
             kwargs["proxy_url"] = getattr(transfer, "proxy_url", None)
+        if "progress" in signature.parameters:
+            kwargs["progress"] = LogProgress(
+                disk_id,
+                interval=cp.getint(
+                    "config", "imageio_progress_interval", fallback=10
+                ),
+                percent_step=cp.getint(
+                    "config", "imageio_progress_percent", fallback=5
+                ),
+            )
 
         LOG.info("Downloading disk %s -> %s", disk_id, target)
         imageio_client.download(
@@ -413,6 +526,9 @@ def download_disk(connection, backup, disk, disk_dir, cp):
     finally:
         finalize_transfer(connection, transfer, disk_id, cp)
 
+    download_seconds = time.monotonic() - download_started
+
+    LOG.info("Checking qcow2 disk %s with qemu-img", disk_id)
     subprocess.run(
         ["qemu-img", "check", "-q", str(target)],
         check=True,
@@ -424,6 +540,15 @@ def download_disk(connection, backup, disk, disk_dir, cp):
         )
     )
 
+    LOG.info(
+        "Disk %s completed: virtual=%.2f GiB actual=%.2f GiB "
+        "download_time=%.1fs",
+        disk_id,
+        (info.get("virtual-size") or 0) / 1024**3,
+        (info.get("actual-size") or 0) / 1024**3,
+        download_seconds,
+    )
+
     return {
         "id": disk_id,
         "file": "disks/%s" % target.name,
@@ -431,6 +556,7 @@ def download_disk(connection, backup, disk, disk_dir, cp):
         "virtual_size": info.get("virtual-size"),
         "actual_size": info.get("actual-size"),
         "transfer_id": transfer.id,
+        "download_seconds": round(download_seconds, 3),
     }
 
 
@@ -474,6 +600,7 @@ def cleanup_retention(vm_dir, cp):
 
 
 def backup_vm(connection, base, vm_name, cp, dry_run):
+    vm_started = time.monotonic()
     system = connection.system_service()
     vms = system.vms_service()
     vm = find_vm(vms, vm_name)
@@ -593,10 +720,18 @@ def backup_vm(connection, base, vm_name, cp, dry_run):
         manifest["completed_utc"] = dt.datetime.now(
             dt.timezone.utc
         ).isoformat()
+        manifest["duration_seconds"] = round(
+            time.monotonic() - vm_started, 3
+        )
         write_manifest(work / "manifest.json", manifest)
 
         os.rename(work, final)
-        LOG.info("Backup complete for %s: %s", vm_name, final)
+        LOG.info(
+            "Backup complete for %s: %s (%.1fs)",
+            vm_name,
+            final,
+            manifest["duration_seconds"],
+        )
         cleanup_retention(vm_dir, cp)
 
     except Exception:
