@@ -84,6 +84,7 @@ fi
 %{_libexecdir}/ovirt-backup/backup_native.py
 %{_libexecdir}/ovirt-backup/ovirt_backup_web.py
 %{_datadir}/ovirt-backup/web/index.html
+%dir %attr(0750,root,ovirt-backup) %{_sysconfdir}/ovirt-backup
 %config(noreplace) %attr(0640,root,ovirt-backup) %{_sysconfdir}/ovirt-backup/backup.cfg
 %ghost %attr(0640,root,ovirt-backup) %{_sysconfdir}/ovirt-backup/web.token
 %config(noreplace) %{_sysconfdir}/httpd/conf.d/ovirt-backup.conf
