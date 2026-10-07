@@ -3,3 +3,10 @@
 .pydevproject
 .tox
 .cache
+
+# Local configuration and package build output
+config.cfg
+web.token
+*.rpm
+*.src.rpm
+rpmbuild/
