@@ -254,19 +254,41 @@ def sanitize_ovf(ovf_path, target_name):
                     removed_items += 1
 
     name_changed = False
+    name_parent = None
+
+    # oVirt OVF produced by different engine/import paths may represent the
+    # virtual machine container as either Content or VirtualSystem.  Rename
+    # only a direct child Name of that VM container; never touch hardware,
+    # network or disk names nested deeper in the document.
     for content in root.iter():
-        if local_name(content.tag) != "Content":
+        if local_name(content.tag) not in ("Content", "VirtualSystem"):
             continue
         for child in list(content):
             if local_name(child.tag) == "Name":
                 child.text = target_name
                 name_changed = True
+                name_parent = local_name(content.tag)
                 break
         if name_changed:
             break
 
     if not name_changed:
-        raise RuntimeError("Cannot find VM Name element in OVF")
+        containers = sorted({
+            local_name(element.tag)
+            for element in root.iter()
+            if local_name(element.tag) in ("Content", "VirtualSystem")
+        })
+        raise RuntimeError(
+            "Cannot find direct VM Name element in OVF "
+            "(containers found: %s)"
+            % (", ".join(containers) if containers else "none")
+        )
+
+    LOG.info(
+        "Sanitized OVF VM name in %s container -> %s",
+        name_parent,
+        target_name,
+    )
 
     sanitized = ET.tostring(
         root, encoding="utf-8", xml_declaration=True
