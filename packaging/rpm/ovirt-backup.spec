@@ -1,5 +1,5 @@
 Name:           ovirt-backup-console
-Version:        0.1.0
+Version:        %{?version_override}%{!?version_override:0.1.0}
 Release:        0.1%{?dist}
 Summary:        Native oVirt VM backup tool and local web console
 License:        GPL-3.0-or-later
