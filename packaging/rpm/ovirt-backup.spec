@@ -29,6 +29,8 @@ does not use the deprecated oVirt Export Domain workflow.
 %install
 install -Dpm 0755 backup_native.py \
     %{buildroot}%{_libexecdir}/ovirt-backup/backup_native.py
+install -Dpm 0755 restore_native.py \
+    %{buildroot}%{_libexecdir}/ovirt-backup/restore_native.py
 install -Dpm 0755 web/ovirt_backup_web.py \
     %{buildroot}%{_libexecdir}/ovirt-backup/ovirt_backup_web.py
 install -Dpm 0644 web/static/index.html \
@@ -82,6 +84,7 @@ fi
 %license LICENSE
 %doc README.md NATIVE_BACKUP_V2.md WEB_CONSOLE.md
 %{_libexecdir}/ovirt-backup/backup_native.py
+%{_libexecdir}/ovirt-backup/restore_native.py
 %{_libexecdir}/ovirt-backup/ovirt_backup_web.py
 %{_datadir}/ovirt-backup/web/index.html
 %dir %attr(0750,root,ovirt-backup) %{_sysconfdir}/ovirt-backup
