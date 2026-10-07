@@ -234,6 +234,11 @@ def sanitize_ovf(ovf_path, target_name):
                 removed_references += 1
                 continue
 
+            if lname in ("DiskSection", "NetworkSection"):
+                parent.remove(child)
+                removed_sections += 1
+                continue
+
             if lname == "Section":
                 section_type = get_attr(child, "type") or ""
                 if (
@@ -282,6 +287,29 @@ def sanitize_ovf(ovf_path, target_name):
             "Cannot find direct VM Name element in OVF "
             "(containers found: %s)"
             % (", ".join(containers) if containers else "none")
+        )
+
+    # Safety validation: the isolated restore VM must not retain any OVF
+    # disk/network declarations. Disks are recreated and attached explicitly
+    # after the VM shell is created, and NICs are intentionally omitted.
+    leftovers = []
+    for element in root.iter():
+        lname = local_name(element.tag)
+        if lname in ("DiskSection", "NetworkSection", "Disk"):
+            leftovers.append(lname)
+            continue
+        if lname == "Section":
+            section_type = get_attr(element, "type") or ""
+            if (
+                section_type.endswith("DiskSection_Type")
+                or section_type.endswith("NetworkSection_Type")
+            ):
+                leftovers.append(section_type)
+
+    if leftovers:
+        raise RuntimeError(
+            "Unsafe sanitized OVF still contains disk/network declarations: %s"
+            % ", ".join(sorted(set(leftovers)))
         )
 
     LOG.info(
