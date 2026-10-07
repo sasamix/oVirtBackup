@@ -10,3 +10,5 @@ web.token
 *.rpm
 *.src.rpm
 rpmbuild/
+
+config.native.cfg
