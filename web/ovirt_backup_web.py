@@ -178,9 +178,9 @@ def list_vms(cp):
             cores = None
             if vm.cpu and vm.cpu.topology:
                 cores = (
-                    vm.cpu.topology.cores
-                    * vm.cpu.topology.sockets
-                    * vm.cpu.topology.threads
+                    (vm.cpu.topology.cores or 1)
+                    * (vm.cpu.topology.sockets or 1)
+                    * (vm.cpu.topology.threads or 1)
                 )
             items.append({
                 "id": vm.id,
