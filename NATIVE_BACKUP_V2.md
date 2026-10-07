@@ -29,3 +29,23 @@ The pioner branch remains the rollback path.
   filesystem if an NFS mount disappears.
 - The legacy Export Domain is not used.
 - The web console is read-only until backup and restore are validated.
+
+
+## Restore prototype
+
+`restore_native.py` restores one completed FULL backup into a new VM.
+
+Safety defaults:
+
+- preflight-only unless `--execute` is supplied;
+- target VM name must not already exist;
+- disk and NIC entries are stripped from the saved OVF before VM creation;
+- backup disks are recreated and uploaded through ImageTransfer;
+- restored disks are attached after upload;
+- no NICs are restored;
+- the VM is never started automatically;
+- restore state is recorded under `/var/lib/ovirt-backup/restores`;
+- failed restore resources are kept for diagnosis rather than deleted automatically.
+
+This allows a restore test beside the running source VM without duplicate MAC or
+IP conflicts.
