@@ -980,6 +980,12 @@ def main():
         final_nics = vm_service.nics_service().list()
         attachments = vm_service.disk_attachments_service().list()
 
+        if final_vm.status != types.VmStatus.DOWN:
+            raise RuntimeError(
+                "Safety check failed: restored VM %s status=%s, expected DOWN"
+                % (target_name, final_vm.status)
+            )
+
         expected_nics = 0 if args.network_mode == "none" else len(nic_meta)
         if len(final_nics) != expected_nics:
             raise RuntimeError(
