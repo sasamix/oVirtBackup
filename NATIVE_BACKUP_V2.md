@@ -49,3 +49,19 @@ Safety defaults:
 
 This allows a restore test beside the running source VM without duplicate MAC or
 IP conflicts.
+
+
+### Network restore modes
+
+`restore_native.py` supports three explicit network modes. The VM is never
+started automatically in any mode.
+
+- `--network-mode none`: do not create NICs.
+- `--network-mode isolated`: recreate NIC count, names, interfaces and vNIC
+  profiles, let Engine allocate new MAC addresses, and force link down.
+- `--network-mode original`: recreate NICs with the saved original MAC
+  addresses and profiles. This mode is for real disaster recovery and refuses
+  to run while the source VM still exists in the same Engine.
+
+Native backups store NIC metadata in manifest.json so DHCP reservations tied to
+MAC addresses can be restored exactly.
