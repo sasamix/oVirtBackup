@@ -719,6 +719,46 @@ def main():
                 % args.network_mode
             )
 
+        if args.network_mode != "none":
+            profiles_service = system.vnic_profiles_service()
+            for index, meta in enumerate(nic_meta, start=1):
+                nic_name = meta.get("name") or ("nic%d" % index)
+                mac = meta.get("mac")
+                profile_id = meta.get("vnic_profile_id")
+
+                if not mac:
+                    raise RuntimeError(
+                        "NIC %s has no saved MAC address" % nic_name
+                    )
+                if not profile_id:
+                    raise RuntimeError(
+                        "NIC %s has no saved vNIC profile id" % nic_name
+                    )
+
+                try:
+                    profile = (
+                        profiles_service
+                        .vnic_profile_service(profile_id)
+                        .get()
+                    )
+                except sdk.NotFoundError:
+                    raise RuntimeError(
+                        "Saved vNIC profile %s for NIC %s no longer exists"
+                        % (profile_id, nic_name)
+                    )
+
+                LOG.info(
+                    "Saved NIC %s: mac=%s interface=%s profile=%s (%s) "
+                    "plugged=%s linked=%s",
+                    nic_name,
+                    mac,
+                    meta.get("interface"),
+                    getattr(profile, "name", None),
+                    profile_id,
+                    meta.get("plugged"),
+                    meta.get("linked"),
+                )
+
         if args.network_mode == "original":
             source_vm_id = manifest.get("vm_id")
             source_vm_exists = False
@@ -992,6 +1032,17 @@ def main():
                 "Restored VM has %d NIC(s), expected %d"
                 % (len(final_nics), expected_nics)
             )
+
+        if args.network_mode == "isolated":
+            linked_nics = [
+                nic for nic in final_nics
+                if getattr(nic, "linked", None) is not False
+            ]
+            if linked_nics:
+                raise RuntimeError(
+                    "Safety check failed: isolated restore has %d NIC(s) "
+                    "with link not down" % len(linked_nics)
+                )
 
         restored_ids = {d["target_disk_id"] for d in state["created_disks"]}
         attached_ids = {att.disk.id for att in attachments}
