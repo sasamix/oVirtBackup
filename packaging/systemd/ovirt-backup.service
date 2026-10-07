@@ -1,0 +1,20 @@
+[Unit]
+Description=oVirt Native VM Backup
+After=network-online.target remote-fs.target
+Wants=network-online.target
+ConditionPathExists=/etc/ovirt-backup/backup.cfg
+
+[Service]
+Type=oneshot
+User=ovirt-backup
+Group=ovirt-backup
+ExecStart=/usr/libexec/ovirt-backup/backup_native.py -c /etc/ovirt-backup/backup.cfg
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=6
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/etc/ovirt-backup
+ReadWritePaths=/var/lib/ovirt-backup /var/log/ovirt-backup /backup
