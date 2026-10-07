@@ -1,0 +1,21 @@
+[Unit]
+Description=oVirt Backup Console
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ovirt-backup
+Group=ovirt-backup
+ExecStart=/usr/libexec/ovirt-backup/ovirt_backup_web.py --config /etc/ovirt-backup/backup.cfg --static-dir /usr/share/ovirt-backup/web --token-file /etc/ovirt-backup/web.token --listen 127.0.0.1 --port 8765
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/etc/ovirt-backup /usr/share/ovirt-backup /usr/libexec/ovirt-backup
+ReadWritePaths=/var/lib/ovirt-backup /var/log/ovirt-backup
+
+[Install]
+WantedBy=multi-user.target
