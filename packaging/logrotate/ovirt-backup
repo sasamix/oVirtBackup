@@ -1,0 +1,9 @@
+/var/log/ovirt-backup/*.log {
+    daily
+    rotate 30
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+}
