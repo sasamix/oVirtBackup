@@ -22,6 +22,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -192,144 +193,259 @@ def ovf_disk_boot_order(root, disk_id):
     return None
 
 
-def sanitize_ovf(ovf_path, target_name):
-    data = ovf_path.read_bytes()
-
-    # Preserve the original namespace prefixes. This matters because OVF
-    # contains QName values such as xsi:type="ovf:VirtualSystem_Type".
-    # ElementTree otherwise may serialize the namespace as ns0 while leaving
-    # the QName value unchanged.
-    seen_namespaces = set()
+def _register_ovf_namespaces(data):
+    seen = set()
     for _event, ns in ET.iterparse(
         io.BytesIO(data), events=("start-ns",)
     ):
         prefix, uri = ns
         key = (prefix or "", uri)
-        if key in seen_namespaces:
+        if key in seen:
             continue
-        seen_namespaces.add(key)
+        seen.add(key)
         ET.register_namespace(prefix or "", uri)
 
+
+def _set_attr(element, name, value):
+    for key in list(element.attrib):
+        if local_name(key) == name:
+            element.attrib[key] = value
+            return
+    raise RuntimeError(
+        "OVF element %s has no attribute %s"
+        % (local_name(element.tag), name)
+    )
+
+
+def prepare_ovf_template(ovf_path, target_name):
+    data = ovf_path.read_bytes()
+    _register_ovf_namespaces(data)
     root = ET.fromstring(data)
 
+    # ConfigurationType.OVF expects native oVirt OVF. OVA-style OVF uses a
+    # VirtualSystem element instead of the native Content container.
+    contents = [
+        element for element in root.iter()
+        if local_name(element.tag) == "Content"
+    ]
+    if not contents:
+        if any(
+            local_name(element.tag) == "VirtualSystem"
+            for element in root.iter()
+        ):
+            raise RuntimeError(
+                "vm.ovf is OVA-style OVF, not native oVirt OVF. "
+                "Refresh it with vms_service.list(..., all_content=True)."
+            )
+        raise RuntimeError("Native oVirt OVF Content container not found")
+
+    content = contents[0]
+    name_changed = False
+    for child in list(content):
+        if local_name(child.tag) == "Name":
+            child.text = target_name
+            name_changed = True
+            break
+    if not name_changed:
+        raise RuntimeError("Cannot find VM Name element in native oVirt OVF")
+
+    source_disk_ids = set()
+    source_image_ids = {}
     boot_orders = {}
-    disk_ids = []
+
     for element in root.iter():
-        if local_name(element.tag) == "Disk":
-            disk_id = get_attr(element, "diskId")
-            if disk_id:
-                disk_ids.append(disk_id)
-                boot_orders[disk_id] = ovf_disk_boot_order(root, disk_id)
+        lname = local_name(element.tag)
+        if lname == "File":
+            href = get_attr(element, "href")
+            image_id = get_attr(element, "id")
+            if href and "/" in href:
+                disk_id = href.split("/", 1)[0]
+                source_disk_ids.add(disk_id)
+                source_image_ids[disk_id] = image_id
 
-    removed_sections = 0
-    removed_items = 0
-    removed_references = 0
+        if lname == "Disk":
+            file_ref = get_attr(element, "fileRef")
+            disk_id_attr = get_attr(element, "diskId")
+            if file_ref and "/" in file_ref:
+                disk_id = file_ref.split("/", 1)[0]
+                source_disk_ids.add(disk_id)
+                if disk_id_attr:
+                    source_image_ids.setdefault(disk_id, disk_id_attr)
 
+    for disk_id, image_id in list(source_image_ids.items()):
+        boot_orders[disk_id] = ovf_disk_boot_order(root, image_id)
+
+    removed_network_sections = 0
+    removed_network_items = 0
+    removed_nic_refs = 0
+
+    # Keep References, DiskSection and disk hardware items intact. Engine needs
+    # them to parse native OVF. Only network declarations are removed; NICs are
+    # recreated explicitly according to --network-mode after VM creation.
     for parent in list(root.iter()):
         for child in list(parent):
             lname = local_name(child.tag)
 
-            if lname == "References":
+            if lname == "NetworkSection":
                 parent.remove(child)
-                removed_references += 1
-                continue
-
-            if lname in ("DiskSection", "NetworkSection"):
-                parent.remove(child)
-                removed_sections += 1
+                removed_network_sections += 1
                 continue
 
             if lname == "Section":
                 section_type = get_attr(child, "type") or ""
-                if (
-                    section_type.endswith("DiskSection_Type")
-                    or section_type.endswith("NetworkSection_Type")
-                ):
+                if section_type.endswith("NetworkSection_Type"):
                     parent.remove(child)
-                    removed_sections += 1
+                    removed_network_sections += 1
                     continue
+
+            if lname == "Nic":
+                parent.remove(child)
+                removed_nic_refs += 1
+                continue
 
             if lname == "Item":
                 resource_type = element_text(child, "ResourceType")
                 device_type = (element_text(child, "Type") or "").lower()
-                if resource_type in ("10", "17") or device_type in (
-                    "interface", "disk"
-                ):
+                if resource_type == "10" or device_type == "interface":
                     parent.remove(child)
-                    removed_items += 1
+                    removed_network_items += 1
+                    continue
 
-    name_changed = False
-    name_parent = None
-
-    # oVirt OVF produced by different engine/import paths may represent the
-    # virtual machine container as either Content or VirtualSystem.  Rename
-    # only a direct child Name of that VM container; never touch hardware,
-    # network or disk names nested deeper in the document.
-    for content in root.iter():
-        if local_name(content.tag) not in ("Content", "VirtualSystem"):
-            continue
-        for child in list(content):
-            if local_name(child.tag) == "Name":
-                child.text = target_name
-                name_changed = True
-                name_parent = local_name(content.tag)
-                break
-        if name_changed:
-            break
-
-    if not name_changed:
-        containers = sorted({
-            local_name(element.tag)
-            for element in root.iter()
-            if local_name(element.tag) in ("Content", "VirtualSystem")
-        })
-        raise RuntimeError(
-            "Cannot find direct VM Name element in OVF "
-            "(containers found: %s)"
-            % (", ".join(containers) if containers else "none")
-        )
-
-    # Safety validation: the isolated restore VM must not retain any OVF
-    # disk/network declarations. Disks are recreated and attached explicitly
-    # after the VM shell is created, and NICs are intentionally omitted.
     leftovers = []
     for element in root.iter():
         lname = local_name(element.tag)
-        if lname in ("DiskSection", "NetworkSection", "Disk"):
+        if lname in ("NetworkSection", "Nic"):
             leftovers.append(lname)
-            continue
-        if lname == "Section":
+        elif lname == "Section":
             section_type = get_attr(element, "type") or ""
-            if (
-                section_type.endswith("DiskSection_Type")
-                or section_type.endswith("NetworkSection_Type")
-            ):
+            if section_type.endswith("NetworkSection_Type"):
                 leftovers.append(section_type)
+        elif lname == "Item":
+            resource_type = element_text(element, "ResourceType")
+            device_type = (element_text(element, "Type") or "").lower()
+            if resource_type == "10" or device_type == "interface":
+                leftovers.append("network Item")
 
     if leftovers:
         raise RuntimeError(
-            "Unsafe sanitized OVF still contains disk/network declarations: %s"
+            "OVF still contains network declarations after sanitization: %s"
             % ", ".join(sorted(set(leftovers)))
         )
 
-    LOG.info(
-        "Sanitized OVF VM name in %s container -> %s",
-        name_parent,
-        target_name,
-    )
-
-    sanitized = ET.tostring(
+    prepared = ET.tostring(
         root, encoding="utf-8", xml_declaration=True
     )
-    ET.fromstring(sanitized)
+    ET.fromstring(prepared)
 
-    return sanitized, {
-        "disk_ids": disk_ids,
+    LOG.info(
+        "Prepared native OVF for %s: network_sections=%d "
+        "network_items=%d nic_refs=%d disks=%d",
+        target_name,
+        removed_network_sections,
+        removed_network_items,
+        removed_nic_refs,
+        len(source_disk_ids),
+    )
+
+    return prepared, {
+        "source_disk_ids": sorted(source_disk_ids),
+        "source_image_ids": source_image_ids,
         "boot_orders": boot_orders,
-        "removed_sections": removed_sections,
-        "removed_items": removed_items,
-        "removed_references": removed_references,
+        "removed_network_sections": removed_network_sections,
+        "removed_network_items": removed_network_items,
+        "removed_nic_refs": removed_nic_refs,
     }
+
+
+def rewrite_ovf_disks(prepared_ovf, disk_map, storage_id, storage_pool_id=None):
+    _register_ovf_namespaces(prepared_ovf)
+    root = ET.fromstring(prepared_ovf)
+    rewritten = {disk_id: {"file": 0, "disk": 0, "item": 0}
+                 for disk_id in disk_map}
+    new_snapshot_id = str(uuid.uuid4())
+
+    def mapping_from_ref(ref):
+        if not ref or "/" not in ref:
+            return None, None
+        source_disk_id = ref.split("/", 1)[0]
+        return source_disk_id, disk_map.get(source_disk_id)
+
+    for element in root.iter():
+        lname = local_name(element.tag)
+
+        if lname == "File":
+            href = get_attr(element, "href")
+            source_disk_id, mapping = mapping_from_ref(href)
+            if mapping:
+                new_ref = "%s/%s" % (
+                    mapping["target_disk_id"],
+                    mapping["target_image_id"],
+                )
+                _set_attr(element, "href", new_ref)
+                _set_attr(element, "id", mapping["target_image_id"])
+                rewritten[source_disk_id]["file"] += 1
+
+        elif lname == "Disk":
+            file_ref = get_attr(element, "fileRef")
+            source_disk_id, mapping = mapping_from_ref(file_ref)
+            if mapping:
+                new_ref = "%s/%s" % (
+                    mapping["target_disk_id"],
+                    mapping["target_image_id"],
+                )
+                _set_attr(element, "fileRef", new_ref)
+                _set_attr(element, "diskId", mapping["target_image_id"])
+                if get_attr(element, "parentRef") is not None:
+                    _set_attr(element, "parentRef", "")
+                if get_attr(element, "vm_snapshot_id") is not None:
+                    _set_attr(element, "vm_snapshot_id", new_snapshot_id)
+                rewritten[source_disk_id]["disk"] += 1
+
+        elif lname == "Item":
+            if element_text(element, "ResourceType") != "17":
+                continue
+            host_resource = element_text(element, "HostResource")
+            source_disk_id, mapping = mapping_from_ref(host_resource)
+            if not mapping:
+                continue
+
+            new_ref = "%s/%s" % (
+                mapping["target_disk_id"],
+                mapping["target_image_id"],
+            )
+            for child in list(element):
+                child_name = local_name(child.tag)
+                if child_name == "InstanceId":
+                    child.text = mapping["target_image_id"]
+                elif child_name == "HostResource":
+                    child.text = new_ref
+                elif child_name == "StorageId":
+                    child.text = storage_id
+                elif child_name == "StoragePoolId" and storage_pool_id:
+                    child.text = storage_pool_id
+                elif child_name == "Parent":
+                    child.text = "00000000-0000-0000-0000-000000000000"
+
+            rewritten[source_disk_id]["item"] += 1
+
+    problems = []
+    for source_disk_id, counts in rewritten.items():
+        if counts["file"] < 1:
+            problems.append("%s: no File reference" % source_disk_id)
+        if counts["disk"] < 1:
+            problems.append("%s: no Disk entry" % source_disk_id)
+        if counts["item"] < 1:
+            problems.append("%s: no hardware disk Item" % source_disk_id)
+
+    if problems:
+        raise RuntimeError(
+            "Cannot rewrite native OVF disk references: %s"
+            % "; ".join(problems)
+        )
+
+    result = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+    ET.fromstring(result)
+    return result, rewritten
 
 
 def wait_disk_ok(system, disk_id, timeout):
@@ -646,7 +762,9 @@ def main():
             "--storage-domain is required because storage_domain is not configured"
         )
 
-    sanitized_ovf, ovf_meta = sanitize_ovf(ovf_path, target_name)
+    prepared_ovf, ovf_meta = prepare_ovf_template(
+        ovf_path, target_name
+    )
 
     LOG.info("Backup: %s", backup_dir)
     LOG.info("Source VM: %s (%s)", source_name, manifest.get("vm_id"))
@@ -655,10 +773,12 @@ def main():
     LOG.info("Target storage domain: %s", storage_name)
     LOG.info("Network mode: %s", args.network_mode)
     LOG.info(
-        "Sanitized OVF: removed references=%d sections=%d hardware_items=%d",
-        ovf_meta["removed_references"],
-        ovf_meta["removed_sections"],
-        ovf_meta["removed_items"],
+        "Native OVF: disks=%d, removed network sections=%d, "
+        "network items=%d, nic refs=%d",
+        len(ovf_meta["source_disk_ids"]),
+        ovf_meta["removed_network_sections"],
+        ovf_meta["removed_network_items"],
+        ovf_meta["removed_nic_refs"],
     )
 
     for item in disks:
@@ -679,6 +799,14 @@ def main():
             item["ovf_boot_order"],
         )
         qemu_check(item["path"])
+
+    manifest_disk_ids = {item["source_id"] for item in disks}
+    ovf_disk_ids = set(ovf_meta["source_disk_ids"])
+    if manifest_disk_ids != ovf_disk_ids:
+        raise RuntimeError(
+            "Native OVF disk set differs from manifest: manifest=%s ovf=%s"
+            % (sorted(manifest_disk_ids), sorted(ovf_disk_ids))
+        )
 
     connection = connect(cp)
     try:
