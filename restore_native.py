@@ -921,16 +921,21 @@ def main():
         state_dir = Path("/var/lib/ovirt-backup/restores")
         state_path = state_dir / (
             "%s-%s.json"
-            % (target_name, time.strftime("%Y%m%d_%H%M%S"))
+            % (target_name, time.strftime("%Y%m%d-%H%M%S"))
         )
-        sanitized_path = state_path.with_suffix(".ovf")
+        prepared_path = state_path.with_suffix(".prepared.ovf")
+        final_ovf_path = state_path.with_suffix(".ovf")
         state_dir.mkdir(parents=True, exist_ok=True)
 
-        with open(sanitized_path, "wb") as fh:
-            fh.write(sanitized_ovf)
+        with open(prepared_path, "wb") as fh:
+            fh.write(prepared_ovf)
+
+        storage_pool_id = getattr(
+            getattr(cluster, "data_center", None), "id", None
+        )
 
         state = {
-            "schema": 1,
+            "schema": 2,
             "status": "running",
             "created_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
             "backup_dir": str(backup_dir),
@@ -941,7 +946,9 @@ def main():
             "cluster_id": cluster.id,
             "storage_domain_name": storage_name,
             "storage_domain_id": storage.id,
-            "sanitized_ovf": str(sanitized_path),
+            "storage_pool_id": storage_pool_id,
+            "prepared_ovf": str(prepared_path),
+            "final_ovf": str(final_ovf_path),
             "network_mode": args.network_mode,
             "network_interfaces_restored": False,
             "vm_started": False,
@@ -951,6 +958,93 @@ def main():
         write_state(state_path, state)
         LOG.info("Restore state: %s", state_path)
 
+        # Official oVirt restore flow requires the target disks to exist before
+        # the VM is created from OVF. Create floating disks and upload their
+        # content first, then rewrite OVF references to the new disk/image IDs.
+        disk_map = {}
+        for item in disks:
+            meta = item["metadata"]
+            info = item["qemu_info"]
+            alias = meta.get("alias") or meta.get("name") or "restored-disk"
+            restored_alias = "%s_RESTORE" % alias
+
+            disk_format = types.DiskFormat(
+                (meta.get("format") or "raw").lower()
+            )
+            disk = system.disks_service().add(
+                types.Disk(
+                    alias=restored_alias,
+                    name=restored_alias,
+                    format=disk_format,
+                    sparse=bool(meta.get("sparse")),
+                    provisioned_size=info.get("virtual-size"),
+                    initial_size=info.get("actual-size"),
+                    storage_domains=[
+                        types.StorageDomain(id=storage.id)
+                    ],
+                )
+            )
+            LOG.info(
+                "Created floating target disk %s for source disk %s",
+                disk.id,
+                item["source_id"],
+            )
+
+            state_disk = {
+                "source_disk_id": item["source_id"],
+                "target_disk_id": disk.id,
+                "alias": restored_alias,
+                "file": str(item["path"]),
+                "status": "created",
+            }
+            state["created_disks"].append(state_disk)
+            write_state(state_path, state)
+
+            disk = wait_disk_ok(
+                system,
+                disk.id,
+                cp.getint(
+                    "config", "backup_operation_timeout", fallback=3600
+                ),
+            )
+            target_image_id = getattr(disk, "image_id", None)
+            if not target_image_id:
+                raise RuntimeError(
+                    "Target disk %s has no image_id; cannot rewrite OVF"
+                    % disk.id
+                )
+
+            state_disk["target_image_id"] = target_image_id
+            write_state(state_path, state)
+
+            transfer_id, elapsed = upload_image(
+                connection, item["path"], disk.id, cp
+            )
+            state_disk["transfer_id"] = transfer_id
+            state_disk["upload_seconds"] = round(elapsed, 3)
+            state_disk["status"] = "uploaded"
+            write_state(state_path, state)
+
+            disk_map[item["source_id"]] = {
+                "target_disk_id": disk.id,
+                "target_image_id": target_image_id,
+            }
+
+        final_ovf, rewritten = rewrite_ovf_disks(
+            prepared_ovf,
+            disk_map,
+            storage.id,
+            storage_pool_id=storage_pool_id,
+        )
+        with open(final_ovf_path, "wb") as fh:
+            fh.write(final_ovf)
+            fh.flush()
+            os.fsync(fh.fileno())
+
+        state["ovf_disk_rewrite"] = rewritten
+        write_state(state_path, state)
+        LOG.info("Rewritten native OVF saved: %s", final_ovf_path)
+
         vm = vms_service.add(
             types.Vm(
                 name=target_name,
@@ -958,20 +1052,84 @@ def main():
                 initialization=types.Initialization(
                     configuration=types.Configuration(
                         type=types.ConfigurationType.OVF,
-                        data=sanitized_ovf.decode("utf-8"),
+                        data=final_ovf.decode("utf-8"),
                     )
                 ),
             )
         )
         state["target_vm_id"] = vm.id
         write_state(state_path, state)
-        LOG.info("Created isolated VM %s id=%s", target_name, vm.id)
+        LOG.info(
+            "Created restored VM %s id=%s; VM was not started",
+            target_name,
+            vm.id,
+        )
 
         vm_service = vms_service.vm_service(vm.id)
         wait_vm_down(
             vm_service,
             cp.getint("config", "backup_operation_timeout", fallback=3600),
         )
+
+        # OVF should attach the already uploaded disks. If a particular Engine
+        # version leaves one floating, attach only the missing disk explicitly.
+        attachments_service = vm_service.disk_attachments_service()
+        attachments = attachments_service.list()
+        attached_ids = {att.disk.id for att in attachments}
+
+        for item in disks:
+            source_id = item["source_id"]
+            mapping = disk_map[source_id]
+            target_disk_id = mapping["target_disk_id"]
+            state_disk = next(
+                entry for entry in state["created_disks"]
+                if entry["source_disk_id"] == source_id
+            )
+
+            if target_disk_id in attached_ids:
+                state_disk["status"] = "attached_by_ovf"
+                LOG.info(
+                    "Disk %s attached by OVF to VM %s",
+                    target_disk_id,
+                    target_name,
+                )
+                continue
+
+            meta = item["metadata"]
+            interface = types.DiskInterface(
+                (meta.get("interface") or "virtio").lower()
+            )
+            bootable = bool(meta.get("bootable"))
+            if item["ovf_boot_order"] is not None:
+                bootable = item["ovf_boot_order"] > 0
+            elif len(disks) == 1 and not bootable:
+                LOG.warning(
+                    "No boot flag found for only disk; marking it bootable"
+                )
+                bootable = True
+
+            attachment = attachments_service.add(
+                types.DiskAttachment(
+                    disk=types.Disk(id=target_disk_id),
+                    interface=interface,
+                    active=True,
+                    bootable=bootable,
+                    read_only=False,
+                )
+            )
+            state_disk["attachment_id"] = attachment.id
+            state_disk["interface"] = str(interface)
+            state_disk["bootable"] = bootable
+            state_disk["status"] = "attached_explicitly"
+            write_state(state_path, state)
+            LOG.info(
+                "Attached disk %s explicitly to VM %s "
+                "interface=%s bootable=%s",
+                target_disk_id,
+                target_name,
+                interface,
+                bootable,
+            )
 
         nics_service = vm_service.nics_service()
         nics = nics_service.list()
@@ -984,12 +1142,6 @@ def main():
         if args.network_mode != "none":
             for index, meta in enumerate(nic_meta, start=1):
                 profile_id = meta.get("vnic_profile_id")
-                if not profile_id:
-                    raise RuntimeError(
-                        "NIC %s has no vNIC profile id"
-                        % (meta.get("name") or index)
-                    )
-
                 kwargs = {
                     "name": meta.get("name") or ("nic%d" % index),
                     "vnic_profile": types.VnicProfile(id=profile_id),
@@ -1006,24 +1158,21 @@ def main():
                     )
 
                 if args.network_mode == "original":
-                    mac = meta.get("mac")
-                    if not mac:
-                        raise RuntimeError(
-                            "NIC %s has no saved MAC"
-                            % kwargs["name"]
-                        )
-                    kwargs["mac"] = types.Mac(address=mac)
+                    kwargs["mac"] = types.Mac(address=meta["mac"])
                     kwargs["linked"] = bool(
                         meta.get("linked")
                         if meta.get("linked") is not None else True
                     )
                 else:
-                    # Isolated test restore: let Engine allocate a new MAC but
-                    # keep the original profile and device type. Link is down
-                    # even if an operator later starts the VM manually.
+                    # Test restore: preserve profile/type but use a new MAC and
+                    # force link down. The original MAC remains in manifest.
                     kwargs["linked"] = False
 
                 created_nic = nics_service.add(types.Nic(**kwargs))
+                # Re-read to obtain Engine-assigned MAC and final link state.
+                created_nic = nics_service.nic_service(
+                    created_nic.id
+                ).get()
                 created_meta = {
                     "id": created_nic.id,
                     "name": created_nic.name,
@@ -1054,94 +1203,6 @@ def main():
 
             state["network_interfaces_restored"] = True
             write_state(state_path, state)
-
-        for item in disks:
-            meta = item["metadata"]
-            info = item["qemu_info"]
-            alias = meta.get("alias") or meta.get("name") or "restored-disk"
-            restored_alias = "%s_RESTORE" % alias
-
-            disk_format = types.DiskFormat(
-                (meta.get("format") or "raw").lower()
-            )
-            disk = system.disks_service().add(
-                types.Disk(
-                    alias=restored_alias,
-                    name=restored_alias,
-                    format=disk_format,
-                    sparse=bool(meta.get("sparse")),
-                    provisioned_size=info.get("virtual-size"),
-                    storage_domains=[
-                        types.StorageDomain(id=storage.id)
-                    ],
-                )
-            )
-            LOG.info(
-                "Created target disk %s for source disk %s",
-                disk.id,
-                item["source_id"],
-            )
-
-            state_disk = {
-                "source_disk_id": item["source_id"],
-                "target_disk_id": disk.id,
-                "alias": restored_alias,
-                "file": str(item["path"]),
-                "status": "created",
-            }
-            state["created_disks"].append(state_disk)
-            write_state(state_path, state)
-
-            wait_disk_ok(
-                system,
-                disk.id,
-                cp.getint(
-                    "config", "backup_operation_timeout", fallback=3600
-                ),
-            )
-
-            transfer_id, elapsed = upload_image(
-                connection, item["path"], disk.id, cp
-            )
-            state_disk["transfer_id"] = transfer_id
-            state_disk["upload_seconds"] = round(elapsed, 3)
-            state_disk["status"] = "uploaded"
-            write_state(state_path, state)
-
-            interface = types.DiskInterface(
-                (meta.get("interface") or "virtio").lower()
-            )
-            bootable = bool(meta.get("bootable"))
-            if item["ovf_boot_order"] is not None:
-                bootable = item["ovf_boot_order"] > 0
-            elif len(disks) == 1 and not bootable:
-                LOG.warning(
-                    "No boot flag found for only disk; marking it bootable "
-                    "for restore test"
-                )
-                bootable = True
-
-            attachment = vm_service.disk_attachments_service().add(
-                types.DiskAttachment(
-                    disk=types.Disk(id=disk.id),
-                    interface=interface,
-                    active=True,
-                    bootable=bootable,
-                    read_only=False,
-                )
-            )
-            state_disk["attachment_id"] = attachment.id
-            state_disk["interface"] = str(interface)
-            state_disk["bootable"] = bootable
-            state_disk["status"] = "attached"
-            write_state(state_path, state)
-            LOG.info(
-                "Attached disk %s to VM %s interface=%s bootable=%s",
-                disk.id,
-                target_name,
-                interface,
-                bootable,
-            )
 
         final_vm = vm_service.get()
         final_nics = vm_service.nics_service().list()
