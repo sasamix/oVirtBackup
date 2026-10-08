@@ -240,6 +240,26 @@ def prepare_ovf_template(ovf_path, target_name):
         raise RuntimeError("Native oVirt OVF Content container not found")
 
     content = contents[0]
+
+    # Native oVirt OVF stores the VM UUID in the OperatingSystemSection id.
+    # Generate a fresh UUID so a test restore can coexist with the source VM.
+    target_vm_id = str(uuid.uuid4())
+    os_section_rewritten = False
+    for element in root.iter():
+        if local_name(element.tag) != "Section":
+            continue
+        section_type = get_attr(element, "type") or ""
+        if section_type.endswith("OperatingSystemSection_Type"):
+            _set_attr(element, "id", target_vm_id)
+            os_section_rewritten = True
+            break
+
+    if not os_section_rewritten:
+        raise RuntimeError(
+            "Native oVirt OVF OperatingSystemSection not found; "
+            "cannot assign a safe target VM UUID"
+        )
+
     name_changed = False
     for child in list(content):
         if local_name(child.tag) == "Name":
@@ -354,6 +374,7 @@ def prepare_ovf_template(ovf_path, target_name):
         "removed_network_sections": removed_network_sections,
         "removed_network_items": removed_network_items,
         "removed_nic_refs": removed_nic_refs,
+        "target_vm_id": target_vm_id,
     }
 
 
@@ -773,8 +794,9 @@ def main():
     LOG.info("Target storage domain: %s", storage_name)
     LOG.info("Network mode: %s", args.network_mode)
     LOG.info(
-        "Native OVF: disks=%d, removed network sections=%d, "
-        "network items=%d, nic refs=%d",
+        "Native OVF: target_vm_id=%s, disks=%d, "
+        "removed network sections=%d, network items=%d, nic refs=%d",
+        ovf_meta["target_vm_id"],
         len(ovf_meta["source_disk_ids"]),
         ovf_meta["removed_network_sections"],
         ovf_meta["removed_network_items"],
@@ -942,6 +964,7 @@ def main():
             "source_vm_name": source_name,
             "source_vm_id": manifest.get("vm_id"),
             "target_vm_name": target_name,
+            "prepared_target_vm_id": ovf_meta["target_vm_id"],
             "cluster_name": cluster_name,
             "cluster_id": cluster.id,
             "storage_domain_name": storage_name,
