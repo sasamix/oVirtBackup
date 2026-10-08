@@ -281,7 +281,7 @@ def _extract_ovf(source):
         return None
 
 
-def save_ovf(vm_service, backup, target):
+def save_ovf(vms_service, vm_service, vm_id, backup, target):
     snapshot_id = getattr(getattr(backup, "snapshot", None), "id", None)
     ovf = None
 
@@ -307,22 +307,20 @@ def save_ovf(vm_service, backup, target):
             )
 
     if not ovf:
-        kwargs = {"all_content": True}
-        try:
-            if "ovf_as_ova" in inspect.signature(vm_service.get).parameters:
-                kwargs["ovf_as_ova"] = True
-        except (TypeError, ValueError):
-            pass
-
-        try:
-            source = vm_service.get(**kwargs)
-        except TypeError:
-            source = vm_service.get(all_content=True)
-
-        ovf = _extract_ovf(source)
+        # Official oVirt SDK backup examples fetch native oVirt OVF from the
+        # VMs collection with all_content=True. Do not use ovf_as_ova here:
+        # that produces OVA-style OVF which Engine's ConfigurationType.OVF
+        # restore path does not parse as native oVirt OVF.
+        matches = vms_service.list(
+            search="id=%s" % vm_id,
+            all_content=True,
+        )
+        exact = [item for item in matches if item.id == vm_id]
+        if exact:
+            ovf = _extract_ovf(exact[0])
 
     if not ovf:
-        LOG.warning("Engine returned no OVF data from snapshot or current VM")
+        LOG.warning("Engine returned no native oVirt OVF data")
         return snapshot_id, False
 
     data = ovf if isinstance(ovf, bytes) else str(ovf).encode("utf-8")
@@ -706,7 +704,7 @@ def backup_vm(connection, base, vm_name, cp, dry_run):
         )
 
         snapshot_id, ovf_saved = save_ovf(
-            vm_service, backup, work / "vm.ovf"
+            vms, vm_service, vm.id, backup, work / "vm.ovf"
         )
         manifest["snapshot_id"] = snapshot_id
         manifest["ovf_saved"] = ovf_saved
