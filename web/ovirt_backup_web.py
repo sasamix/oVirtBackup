@@ -27,7 +27,7 @@ import pycurl
 LOG = logging.getLogger("ovirt-backup-web")
 MAX_VMS = 400
 
-SENSITIVE_KEYS = {"password", "token", "secret", "web_token"}
+SENSITIVE_KEYS = {"password", "passwd", "token", "secret", "credential", "private_key", "api_key"}
 DEFAULT_CONFIG_BACKUP_DIR = "/var/lib/ovirt-backup/config-backups"
 DEFAULT_OPERATION_LOCK = "/var/lib/ovirt-backup/operation.lock"
 DEFAULT_SCHEDULER_SOCKET = "/run/ovirt-backup/scheduler.sock"
@@ -39,6 +39,7 @@ SETTINGS_SCHEMA = {
     "vm_names": {
         "group": "Virtual machines",
         "label": "Selected VMs",
+        "options_source": "vms",
         "type": "list",
         "default": [],
         "description": "Explicit VM names. Use one selection mode only.",
@@ -46,6 +47,7 @@ SETTINGS_SCHEMA = {
     "vm_names_skip": {
         "group": "Virtual machines",
         "label": "Exclude VMs",
+        "options_source": "vms",
         "type": "list",
         "default": [],
         "description": "Back up every VM except these names.",
@@ -53,6 +55,7 @@ SETTINGS_SCHEMA = {
     "vm_tag": {
         "group": "Virtual machines",
         "label": "VM tag",
+        "options_source": "tags",
         "type": "string",
         "default": "",
         "description": "Back up VMs with this oVirt tag.",
@@ -129,6 +132,7 @@ SETTINGS_SCHEMA = {
     "imageio_network": {
         "group": "Image transfer",
         "label": "ImageIO logical network",
+        "options_source": "networks",
         "type": "string",
         "default": "",
         "description": "Logical network used for direct host ImageTransfer traffic.",
@@ -218,18 +222,21 @@ SETTINGS_SCHEMA = {
     "disks_id_exclude": {
         "group": "Disks",
         "label": "Excluded disk IDs",
+        "options_source": "disks",
         "type": "list",
         "default": [],
     },
     "cluster_name": {
         "group": "Restore defaults",
         "label": "Target cluster",
+        "options_source": "clusters",
         "type": "string",
         "default": "Default",
     },
     "storage_domain": {
         "group": "Restore defaults",
         "label": "Target storage domain",
+        "options_source": "storage_domains",
         "type": "string",
         "default": "",
         "description": "Default only; restore can override it.",
@@ -466,31 +473,65 @@ def config_schema_payload():
     return result
 
 
-def settings_payload(cp, config_path):
-    values, secret_set = current_settings(cp)
-    known = set(SETTINGS_SCHEMA)
-    unknown = {
+def unmanaged_settings(cp):
+    return {
         key: value
         for key, value in cp.items("config")
-        if key not in known and not any(word in key.lower() for word in SENSITIVE_KEYS)
+        if key not in SETTINGS_SCHEMA
+        and not any(word in key for word in SENSITIVE_KEYS)
     }
+
+
+def editable_unmanaged_keys(cp, unknown):
+    return [
+        key for key, value in unknown.items()
+        if key not in cp.defaults()
+        and re.fullmatch(r"[A-Za-z0-9_.-]+", key)
+        and len(value.splitlines()) <= 1
+    ]
+
+
+def validate_unmanaged_settings(cp, updates):
+    if not isinstance(updates, dict):
+        raise ValueError("unmanaged settings must be an object")
+    unknown = unmanaged_settings(cp)
+    editable = set(editable_unmanaged_keys(cp, unknown))
+    changed = {}
+    errors = {}
+    for key, value in updates.items():
+        if key not in editable:
+            errors[key] = "setting cannot be edited here"
+        elif not isinstance(value, str) or re.search(r"[\x00\r\n\v\f\x1c-\x1e\x85\u2028\u2029]", value):
+            errors[key] = "value must be a single line of text"
+        elif value.strip() != unknown[key]:
+            changed[key] = value.strip()
+    if errors:
+        raise SettingsValidationError(errors)
+    return changed
+
+
+def settings_payload(cp, config_path):
+    values, secret_set = current_settings(cp)
+    unknown = unmanaged_settings(cp)
     return {
         "config_path": str(config_path),
         "schema": config_schema_payload(),
         "values": values,
         "secret_set": secret_set,
         "unknown": unknown,
+        "editable_unknown": editable_unmanaged_keys(cp, unknown),
     }
 
 
-def render_config_update(original, merged):
+def render_config_update(original, merged, unmanaged=None):
+    unmanaged = unmanaged or {}
     lines = original.splitlines(keepends=True)
     output = []
     in_config = False
     found_config = False
     seen = set()
 
-    key_pattern = re.compile(r"^(\s*)([A-Za-z0-9_.-]+)(\s*=\s*)(.*?)(\r?\n)?$")
+    key_pattern = re.compile(r"^(\s*)([A-Za-z0-9_.-]+)(\s*[:=][ \t]*)(.*?)(\r?\n)?$")
     section_pattern = re.compile(r"^\s*\[([^\]]+)\]\s*(?:[#;].*)?(?:\r?\n)?$")
 
     def append_missing():
@@ -518,7 +559,11 @@ def render_config_update(original, merged):
             match = key_pattern.match(line)
             if match:
                 key = match.group(2).lower()
-                if key in SETTINGS_SCHEMA:
+                if key in SETTINGS_SCHEMA or key in unmanaged:
+                    value = (
+                        serialize_setting(key, merged[key])
+                        if key in SETTINGS_SCHEMA else unmanaged[key]
+                    )
                     newline = match.group(5) or "\n"
                     output.append(
                         "%s%s%s%s%s"
@@ -526,7 +571,7 @@ def render_config_update(original, merged):
                             match.group(1),
                             match.group(2),
                             match.group(3),
-                            serialize_setting(key, merged[key]),
+                            value,
                             newline,
                         )
                     )
@@ -547,7 +592,7 @@ def render_config_update(original, merged):
     return "".join(output)
 
 
-def atomic_save_settings(config_path, merged, backup_dir):
+def atomic_save_settings(config_path, merged, backup_dir, unmanaged=None):
     path = Path(config_path)
     parent = path.parent
     if not parent.is_dir():
@@ -556,12 +601,15 @@ def atomic_save_settings(config_path, merged, backup_dir):
         raise RuntimeError("Config directory is not writable: %s" % parent)
 
     original = path.read_text(encoding="utf-8") if path.exists() else "[config]\n"
-    rendered = render_config_update(original, merged)
+    rendered = render_config_update(original, merged, unmanaged)
 
     # Parse the exact generated text before touching the live configuration.
     probe = configparser.RawConfigParser()
     probe.read_string(rendered)
     merge_settings(probe, {})
+    for key, value in (unmanaged or {}).items():
+        if probe.get("config", key, fallback=None) != value:
+            raise SettingsValidationError({key: "value could not be saved"})
 
     backup_root = Path(backup_dir)
     backup_root.mkdir(parents=True, exist_ok=True)
@@ -954,13 +1002,15 @@ def engine_summary(cp, engine):
         }
 
 
-def config_from_merged(cp, merged):
+def config_from_merged(cp, merged, unmanaged=None):
     result = configparser.RawConfigParser()
     result.add_section("config")
     for key, value in cp.items("config"):
         result.set("config", key, value)
     for key, value in merged.items():
         result.set("config", key, serialize_setting(key, value))
+    for key, value in (unmanaged or {}).items():
+        result.set("config", key, value)
     return result
 
 
@@ -1523,27 +1573,54 @@ def resolve_backup_directory(cp, value):
     return target, data
 
 
-def restore_options(cp, engine):
+def restore_target_catalog(system, engine):
+    storages = sorted(
+        storage_domain_catalog(system).values(),
+        key=lambda item: (item.get("name") or "").lower(),
+    )
+    engine.ensure_running()
+    clusters = sorted(
+        [
+            {"id": cluster.id, "name": getattr(cluster, "name", None)}
+            for cluster in system.clusters_service().list()
+        ],
+        key=lambda item: (item.get("name") or "").lower(),
+    )
+    return {"storage_domains": storages, "clusters": clusters}
+
+
+def settings_options(cp, engine):
     def query(connection):
         system = connection.system_service()
-        storages = sorted(
-            storage_domain_catalog(system).values(),
-            key=lambda item: (item.get("name") or "").lower(),
-        )
-        engine.ensure_running()
-        clusters = sorted(
-            [
-                {
-                    "id": cluster.id,
-                    "name": getattr(cluster, "name", None),
-                }
-                for cluster in system.clusters_service().list()
-            ],
-            key=lambda item: (item.get("name") or "").lower(),
-        )
+        targets = restore_target_catalog(system, engine)
+        for key, list_resources in (
+            ("networks", lambda: system.networks_service().list()),
+            ("vms", lambda: system.vms_service().list()),
+            ("tags", lambda: system.tags_service().list()),
+            ("disks", lambda: system.disks_service().list()),
+        ):
+            engine.ensure_running()
+            targets[key] = sorted(
+                [
+                    {
+                        "id": resource.id,
+                        "name": getattr(resource, "alias", None)
+                        or getattr(resource, "name", None),
+                    }
+                    for resource in list_resources()
+                ],
+                key=lambda item: (item["name"] or "").lower(),
+            )
+        return targets
+
+    return engine.run(cp, query)
+
+
+def restore_options(cp, engine):
+    def query(connection):
+        targets = restore_target_catalog(connection.system_service(), engine)
         return {
-            "storage_domains": storages,
-            "clusters": clusters,
+            **targets,
             "network_modes": [
                 "none",
                 "isolated",
@@ -1781,10 +1858,13 @@ class Application:
         result["ok"] = all(item["ok"] for item in result["checks"])
         return result
 
-    def validate_settings(self, updates):
+    def validate_settings(self, updates, unmanaged=None):
         cp = self.config()
         merged = merge_settings(cp, updates)
-        draft = config_from_merged(cp, merged)
+        unmanaged = validate_unmanaged_settings(
+            cp, unmanaged if unmanaged is not None else {}
+        )
+        draft = config_from_merged(cp, merged, unmanaged)
         temporary = engine_connection_options(draft) != engine_connection_options(cp)
         result = self._append_config_storage_checks(
             config_checks(draft, self.engine, temporary=temporary)
@@ -1801,14 +1881,18 @@ class Application:
         draft = config_from_merged(cp, merged)
         return retention_preview(draft)
 
-    def save_settings(self, updates):
+    def save_settings(self, updates, unmanaged=None):
         with self.config_lock:
             cp = self.config()
             merged = merge_settings(cp, updates)
+            unmanaged = validate_unmanaged_settings(
+                cp, unmanaged if unmanaged is not None else {}
+            )
             backup = atomic_save_settings(
                 self.config_path,
                 merged,
                 self.config_backup_dir,
+                unmanaged,
             )
             saved = self.config()
 
@@ -2255,6 +2339,8 @@ class Handler(BaseHTTPRequestHandler):
                 })
             elif path == "/api/settings":
                 self.send_json(settings_payload(cp, self.app.config_path))
+            elif path == "/api/settings/options":
+                self.send_json(settings_options(cp, self.app.engine))
             elif path == "/api/operations/current":
                 self.send_json(self.app.current_operation())
             elif path == "/api/restore-options":
@@ -2299,12 +2385,16 @@ class Handler(BaseHTTPRequestHandler):
             body = self.read_json()
 
             if path == "/api/settings/validate":
-                result = self.app.validate_settings(body.get("settings", {}))
+                result = self.app.validate_settings(
+                    body.get("settings", {}), body.get("unmanaged")
+                )
                 self.send_json(result)
                 return
 
             if path == "/api/settings":
-                result = self.app.save_settings(body.get("settings", {}))
+                result = self.app.save_settings(
+                    body.get("settings", {}), body.get("unmanaged")
+                )
                 self.send_json(result)
                 return
 
@@ -2415,6 +2505,10 @@ def self_test():
             "verify_tls=False\n"
             "imageio_timeout_policy=cancel\n"
             "dry_run=True\n"
+            "custom_flag: original\n"
+            "custom_token=hidden\n"
+            "custom_multiline=first\n"
+            "  second\n"
             % repo,
             encoding="utf-8",
         )
@@ -2435,8 +2529,32 @@ def self_test():
             "integer setting validated",
         )
 
-        backup = atomic_save_settings(config_path, merged, backup_dir)
+        check(
+            "unmanaged field visibility",
+            settings_payload(cp, config_path)["editable_unknown"] == ["custom_flag"]
+            and "custom_token" not in unmanaged_settings(cp),
+        )
+        for key, value in (
+            ("custom_token", "new"),
+            ("custom_multiline", "new"),
+            ("absent", "new"),
+            ("custom_flag", "first\nsecond"),
+        ):
+            try:
+                validate_unmanaged_settings(cp, {key: value})
+            except SettingsValidationError:
+                continue
+            raise AssertionError("unexpected unmanaged update: " + key)
+        unmanaged = validate_unmanaged_settings(cp, {"custom_flag": "updated"})
+        backup = atomic_save_settings(config_path, merged, backup_dir, unmanaged)
         saved = read_config(config_path)
+        check(
+            "unmanaged settings update",
+            saved.get("config", "custom_flag") == "updated"
+            and saved.get("config", "custom_token") == "hidden"
+            and "custom_flag: updated" in config_path.read_text(encoding="utf-8")
+            and read_config(backup).get("config", "custom_flag") == "original",
+        )
         check(
             "atomic config save",
             saved.get("config", "password") == "s3cr%t-value"

@@ -52,6 +52,7 @@ Read operations:
 - GET /api/backups
 - GET /api/logs?kind=backup|restore
 - GET /api/settings
+- GET /api/settings/options
 - GET /api/scheduler
 - GET /api/capabilities
 - GET /api/operations/current
@@ -107,6 +108,16 @@ The Validate action checks:
 - configured ImageIO logical network;
 - default restore storage domain;
 - default restore cluster.
+
+The settings form loads ImageIO networks, restore clusters and storage domains,
+VMs, tags, and disk IDs from Engine. Saved values stay visible when they are
+missing from the inventory. ImageIO can use the default Engine route, and
+the restore storage domain can be selected at restore time.
+
+Existing single-line settings outside the native form can be edited in the
+unmanaged settings section. These values use the same atomic save and
+configuration history. Sensitive settings stay hidden. Inherited and
+multiline values are read-only.
 
 ## Retention preview
 
