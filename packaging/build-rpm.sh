@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="${VERSION:-0.1.0}"
+VERSION="${VERSION:-0.3.0}"
 TOPDIR="${TOPDIR:-$HOME/rpmbuild}"
 NAME="ovirt-backup-console"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
