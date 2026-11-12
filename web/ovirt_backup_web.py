@@ -1138,7 +1138,6 @@ def retention_preview(cp):
             if p.is_dir()
             and not p.name.endswith(".partial")
             and ".failed-" not in p.name
-            and (p / "manifest.json").is_file()
         )
         survivors = list(completed)
         reasons = {}
