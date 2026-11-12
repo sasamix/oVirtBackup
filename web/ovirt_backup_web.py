@@ -643,37 +643,39 @@ def read_config(path):
 
 def console_build_info():
     repo_root = Path(__file__).resolve().parent.parent
+    git_dir = repo_root / ".git"
     commit = None
     branch = None
 
-    if (repo_root / ".git").exists():
-        try:
-            commit = subprocess.run(
-                ["git", "-C", str(repo_root), "rev-parse", "--short=8", "HEAD"],
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                text=True,
-                timeout=2,
-            ).stdout.strip() or None
-        except Exception:
-            commit = None
-
-        try:
-            branch = subprocess.run(
-                ["git", "-C", str(repo_root), "rev-parse", "--abbrev-ref", "HEAD"],
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                text=True,
-                timeout=2,
-            ).stdout.strip() or None
-        except Exception:
-            branch = None
+    try:
+        head = (git_dir / "HEAD").read_text(encoding="utf-8").strip()
+        if head.startswith("ref: "):
+            ref = head[5:].strip()
+            branch = ref.rsplit("/", 1)[-1]
+            ref_path = git_dir / ref
+            if ref_path.is_file():
+                commit = ref_path.read_text(encoding="utf-8").strip()
+            else:
+                packed = git_dir / "packed-refs"
+                if packed.is_file():
+                    for line in packed.read_text(
+                            encoding="utf-8"
+                    ).splitlines():
+                        if not line or line.startswith(("#", "^")):
+                            continue
+                        sha, name = line.split(" ", 1)
+                        if name.strip() == ref:
+                            commit = sha.strip()
+                            break
+        elif head:
+            commit = head
+    except Exception:
+        commit = None
+        branch = None
 
     return {
         "version": CONSOLE_VERSION,
-        "commit": commit,
+        "commit": commit[:8] if commit else None,
         "branch": branch,
     }
 
