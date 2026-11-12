@@ -38,6 +38,8 @@ thead th{position:sticky;top:calc(var(--sticky-top) + var(--page-bar-height, 0px
 .operation-log pre{margin-top:10px;max-height:260px}
 .vm-actions,.backup-actions{min-width:7rem;text-align:right}
 .backup-actions button + button{margin-top:4px}
+.vm-backup-flag{text-align:center;white-space:nowrap}
+.vm-backup-flag span{font-weight:700}
 .vm-backup-btn{visibility:hidden}
 tr:has(.vm-select:checked){background:var(--panel2)}
 tr:has(.vm-select:checked) .vm-backup-btn{visibility:visible}
@@ -142,7 +144,7 @@ input[type=checkbox]{width:auto;transform:scale(1.1)}
     </div>
   </div>
   <table>
-    <thead><tr><th></th><th>Name</th><th>Status</th><th>vCPU</th><th>Memory</th><th>Disks / storage</th><th>In backup settings</th><th></th></tr></thead>
+    <thead><tr><th></th><th>Name</th><th>Status</th><th>vCPU</th><th>Memory</th><th>Disks / storage</th><th scope="col" class="vm-backup-flag">Backup</th><th></th></tr></thead>
     <tbody id="vmsBody"></tbody>
   </table>
 </section>
@@ -515,7 +517,7 @@ applyI18n();
 if(uiLang==="ru"){
   const tableMaps=[
     ["#recentBody","thead th",["VM","Создано","Статус","Диски","Фактически","Backup ID"]],
-    ["#vmsBody","thead th",["","Имя","Статус","vCPU","Память","Диски / хранилище","В настройках бэкапа"]],
+    ["#vmsBody","thead th",["","Имя","Статус","vCPU","Память","Диски / хранилище","Бэкап"]],
     ["#backupsBody","thead th",["VM","Каталог","Статус","Тип","Диски","Фактически","Checkpoint",""]]
   ];
   for(const [bodySelector,headerSelector,labels] of tableMaps){
@@ -688,8 +690,10 @@ async function loadVms(){
       '<td><strong>'+esc(v.name)+'</strong><div class="code-id">'+esc(v.id)+'</div></td>'+
       '<td class="'+statusClass(v.status)+'">'+esc(localizedStatus(v.status))+'</td><td>'+esc(v.cpu_cores||"—")+'</td>'+
       '<td>'+fmtBytes(v.memory)+'</td><td>'+disks+'</td>'+
-      '<td><span class="pill '+(v.configured_for_backup?"good":"muted")+'">'+esc(v.configured_for_backup?
-        staticText("vms.in_config","Included"):staticText("vms.not_in_config","Excluded"))+'</span></td>'+
+      '<td class="vm-backup-flag" title="'+esc(v.configured_for_backup?
+        staticText("vms.in_config","Included in backup settings"):
+        staticText("vms.not_in_config","Excluded from backup settings"))+'">'+
+        (v.configured_for_backup?'<span class="good" aria-hidden="true">✓</span>':'')+'</td>'+
       '<td class="vm-actions"><button class="action vm-backup-btn">'+esc(staticText("action.backup_vm","Create backup"))+'</button></td></tr>';
   }).join("")||'<tr><td colspan="8" class="muted">'+esc(staticText("state.no_vms","No VMs"))+'</td></tr>';
 }
