@@ -655,7 +655,7 @@ def get_backup_path(cp):
     return Path(value).expanduser() if value else None
 
 
-def repository_stats(cp):
+def repository_stats(cp, probe_write=False):
     path = get_backup_path(cp)
     if path is None:
         return {
@@ -680,6 +680,29 @@ def repository_stats(cp):
             "free_bytes": st.f_bavail * st.f_frsize,
             "used_bytes": (st.f_blocks - st.f_bfree) * st.f_frsize,
         })
+
+    if probe_write and path.is_dir():
+        probe = path / (
+            ".ovirt-backup-console-write-test-%d-%d"
+            % (os.getpid(), time.time_ns())
+        )
+        try:
+            with open(probe, "wb") as fh:
+                fh.write(b"ok\n")
+                fh.flush()
+                os.fsync(fh.fileno())
+            result["writable"] = True
+            result["write_probe"] = "ok"
+        except Exception as exc:
+            result["writable"] = False
+            result["write_probe"] = str(exc)
+        finally:
+            try:
+                probe.unlink()
+            except FileNotFoundError:
+                pass
+            except Exception as exc:
+                result.setdefault("write_probe_cleanup_error", str(exc))
     return result
 
 
@@ -917,7 +940,7 @@ def config_checks(cp):
     else:
         add("TLS CA", True, "TLS verification disabled")
 
-    repo = repository_stats(cp)
+    repo = repository_stats(cp, probe_write=True)
     add(
         "Backup repository",
         repo.get("exists", False),
@@ -1286,11 +1309,40 @@ class Application:
             return False
         return hmac.compare_digest(auth[7:].strip(), expected)
 
+    def _append_config_storage_checks(self, result):
+        config_parent = self.config_path.parent
+        config_ok = (
+            config_parent.is_dir()
+            and os.access(str(config_parent), os.W_OK)
+        )
+        result["checks"].append({
+            "name": "Config directory",
+            "ok": config_ok,
+            "detail": str(config_parent),
+        })
+
+        backup_parent = self.config_backup_dir
+        backup_ok = (
+            (backup_parent.is_dir() and os.access(str(backup_parent), os.W_OK))
+            or (
+                not backup_parent.exists()
+                and backup_parent.parent.is_dir()
+                and os.access(str(backup_parent.parent), os.W_OK)
+            )
+        )
+        result["checks"].append({
+            "name": "Config history directory",
+            "ok": backup_ok,
+            "detail": str(backup_parent),
+        })
+        result["ok"] = all(item["ok"] for item in result["checks"])
+        return result
+
     def validate_settings(self, updates):
         cp = self.config()
         merged = merge_settings(cp, updates)
         draft = config_from_merged(cp, merged)
-        result = config_checks(draft)
+        result = self._append_config_storage_checks(config_checks(draft))
         result["settings"] = {
             key: ("" if SETTINGS_SCHEMA[key]["type"] == "secret" else value)
             for key, value in merged.items()
@@ -1318,7 +1370,9 @@ class Application:
             "ok": True,
             "backup": backup,
             "settings": settings_payload(saved, self.config_path),
-            "checks": config_checks(saved),
+            "checks": self._append_config_storage_checks(
+                config_checks(saved)
+            ),
         }
 
     def native_dry_run(self, vm_names):
