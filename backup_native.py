@@ -1062,12 +1062,32 @@ def backup_vm(connection, base, vm_name, cp, dry_run):
     api_disks, disk_meta = select_disks(system, vm_service, cp)
     LOG.info("Start native FULL backup for: %s", vm_name)
     for disk in disk_meta:
+        storage_ids = disk.get("storage_domain_ids") or []
         LOG.info(
-            "Selected disk %s bootable=%s provisioned=%.2f GiB",
+            "Selected disk %s bootable=%s provisioned=%.2f GiB "
+            "storage_domains=%r",
             disk["id"],
             disk["bootable"],
             (disk["provisioned_size"] or 0) / 1024**3,
+            storage_ids,
         )
+
+        # Resolve the preferred ImageTransfer host during preflight as well,
+        # so --dry-run verifies per-disk storage/host mapping without moving
+        # any backup data.
+        if len(storage_ids) == 1:
+            imageio_host_for_storage_domain(
+                connection,
+                storage_ids[0],
+                cp,
+            )
+        else:
+            LOG.info(
+                "Disk %s has %d source storage domains; "
+                "Engine will select ImageTransfer host",
+                disk["id"],
+                len(storage_ids),
+            )
 
     check_destination_space(base, disk_meta, cp)
 
