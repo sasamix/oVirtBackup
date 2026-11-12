@@ -91,3 +91,17 @@ Native backup and restore also share
 `/var/lib/ovirt-backup/operation.lock`, so two native heavy I/O operations
 do not run concurrently. The legacy `pioner` branch is intentionally
 unchanged during migration.
+
+
+## Logging and restore metrics
+
+Interactive native backup and restore runs log to both the terminal and files.
+The example configuration uses:
+
+- backup: `/var/log/ovirt-backup/backup-native.log`;
+- restore: `/var/log/ovirt-backup/restore-native.log`.
+
+Completed restore state JSON records total `duration_seconds`. Each restored
+disk records `upload_seconds` and `upload_virtual_mib_per_second`; the latter
+is based on the virtual image size, so it is directly comparable with ImageIO
+progress for sparse RAW images.
