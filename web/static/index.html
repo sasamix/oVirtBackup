@@ -286,9 +286,12 @@ async function loadOverview(){
   document.getElementById("lastBackup").textContent=b?(b.vm_name||"—"):"None";
   document.getElementById("lastBackupInfo").textContent=b?((b.directory||"")+" · "+(b.status||"")):"No manifests";
   const lock=d.lock||{};
-  document.getElementById("lockState").textContent=lock.busy?"BUSY":"Free";
-  document.getElementById("lockState").className="big "+(lock.busy?"warn":"good");
-  document.getElementById("lockInfo").textContent=lock.holder||"No native operation";
+  const legacy=d.legacy_backup_processes||[];
+  document.getElementById("lockState").textContent=legacy.length?"LEGACY":(lock.busy?"BUSY":"Free");
+  document.getElementById("lockState").className="big "+((legacy.length||lock.busy)?"warn":"good");
+  document.getElementById("lockInfo").textContent=legacy.length?
+    ("Legacy backup.py active: "+legacy.map(x=>"pid="+x.pid).join(", ")) :
+    (lock.holder||"No native operation");
   document.getElementById("timerState").textContent=d.timer.ActiveState||"Unavailable";
   document.getElementById("timerInfo").textContent=d.timer.NextElapseUSecRealtime||"timer not installed/enabled";
   document.getElementById("packages").innerHTML=Object.entries(d.packages).map(([k,v])=>kv(k,v||"not installed")).join("");
