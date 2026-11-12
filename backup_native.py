@@ -520,6 +520,48 @@ def collect_nics(system, vm_service):
     return result
 
 
+def disk_storage_domain_ids(connection, disk):
+    """
+    Resolve storage domains without relying on DiskService.get(follow=...).
+
+    Older Engine/SDK combinations can fail that query with an HTML response.
+    Prefer links already present on Disk, then fall back to the disk profile,
+    which is bound to a storage domain in the oVirt API model.
+    """
+    ids = {
+        getattr(ref, "id", None)
+        for ref in (getattr(disk, "storage_domains", None) or [])
+        if getattr(ref, "id", None)
+    }
+
+    singular = getattr(disk, "storage_domain", None)
+    singular_id = getattr(singular, "id", None)
+    if singular_id:
+        ids.add(singular_id)
+
+    if ids:
+        return sorted(ids)
+
+    profile_ref = getattr(disk, "disk_profile", None)
+    profile_id = getattr(profile_ref, "id", None)
+    if not profile_id:
+        return []
+
+    try:
+        profile = connection.follow_link(profile_ref)
+    except Exception:
+        LOG.exception(
+            "Cannot follow disk profile %s for disk %s",
+            profile_id,
+            getattr(disk, "id", None),
+        )
+        return []
+
+    storage_ref = getattr(profile, "storage_domain", None)
+    storage_id = getattr(storage_ref, "id", None)
+    return [storage_id] if storage_id else []
+
+
 def select_disks(connection, system, vm_service, cp):
     bootable_only = cp.getboolean("config", "bootable_only", fallback=False)
     include_inactive = cp.getboolean(
@@ -584,11 +626,9 @@ def select_disks(connection, system, vm_service, cp):
             "actual_size": getattr(disk, "actual_size", None),
             "format": str(disk.format) if getattr(disk, "format", None) else None,
             "sparse": getattr(disk, "sparse", None),
-            "storage_domain_ids": [
-                ref.id
-                for ref in (getattr(disk, "storage_domains", None) or [])
-                if getattr(ref, "id", None)
-            ],
+            "storage_domain_ids": disk_storage_domain_ids(
+                connection, disk
+            ),
         })
 
     return api_disks, metadata
