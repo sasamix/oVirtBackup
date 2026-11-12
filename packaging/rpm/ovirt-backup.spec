@@ -36,8 +36,9 @@ install -Dpm 0755 web/ovirt_backup_web.py \
 install -Dpm 0644 web/static/index.html \
     %{buildroot}%{_datadir}/ovirt-backup/web/index.html
 
+install -d %{buildroot}%{_sysconfdir}/ovirt-backup/config
 install -Dpm 0640 config_native_example.cfg \
-    %{buildroot}%{_sysconfdir}/ovirt-backup/backup.cfg
+    %{buildroot}%{_sysconfdir}/ovirt-backup/config/backup.cfg
 
 install -Dpm 0644 packaging/systemd/ovirt-backup.service \
     %{buildroot}%{_unitdir}/ovirt-backup.service
@@ -52,6 +53,7 @@ install -Dpm 0644 packaging/logrotate/ovirt-backup \
     %{buildroot}%{_sysconfdir}/logrotate.d/ovirt-backup
 
 install -d %{buildroot}%{_localstatedir}/lib/ovirt-backup
+install -d %{buildroot}%{_localstatedir}/lib/ovirt-backup/config-backups
 install -d %{buildroot}%{_localstatedir}/log/ovirt-backup
 
 %pre
@@ -88,7 +90,8 @@ fi
 %{_libexecdir}/ovirt-backup/ovirt_backup_web.py
 %{_datadir}/ovirt-backup/web/index.html
 %dir %attr(0750,root,ovirt-backup) %{_sysconfdir}/ovirt-backup
-%config(noreplace) %attr(0640,root,ovirt-backup) %{_sysconfdir}/ovirt-backup/backup.cfg
+%dir %attr(0750,ovirt-backup,ovirt-backup) %{_sysconfdir}/ovirt-backup/config
+%config(noreplace) %attr(0640,ovirt-backup,ovirt-backup) %{_sysconfdir}/ovirt-backup/config/backup.cfg
 %ghost %attr(0640,root,ovirt-backup) %{_sysconfdir}/ovirt-backup/web.token
 %config(noreplace) %{_sysconfdir}/httpd/conf.d/ovirt-backup.conf
 %config(noreplace) %{_sysconfdir}/logrotate.d/ovirt-backup
@@ -96,6 +99,7 @@ fi
 %{_unitdir}/ovirt-backup.timer
 %{_unitdir}/ovirt-backup-web.service
 %dir %attr(0750,ovirt-backup,ovirt-backup) %{_localstatedir}/lib/ovirt-backup
+%dir %attr(0750,ovirt-backup,ovirt-backup) %{_localstatedir}/lib/ovirt-backup/config-backups
 %dir %attr(0750,ovirt-backup,ovirt-backup) %{_localstatedir}/log/ovirt-backup
 
 %changelog
