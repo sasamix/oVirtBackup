@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import shutil
 import signal
 import socket
@@ -17,6 +18,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from http import HTTPStatus
+from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -32,6 +34,9 @@ DEFAULT_CONFIG_BACKUP_DIR = "/var/lib/ovirt-backup/config-backups"
 DEFAULT_OPERATION_LOCK = "/var/lib/ovirt-backup/operation.lock"
 DEFAULT_SCHEDULER_SOCKET = "/run/ovirt-backup/scheduler.sock"
 CONSOLE_VERSION = "0.5.0"
+SESSION_COOKIE = "ovirt_backup_session"
+SESSION_MAX_AGE = 30 * 24 * 60 * 60
+SESSION_BROWSER_AGE = 12 * 60 * 60
 
 # Ordered schema used by both validation and the browser settings form.
 # Values are stored in the existing INI syntax expected by backup_native.py.
@@ -1958,14 +1963,51 @@ class Application:
         except FileNotFoundError:
             return ""
 
-    def authorized(self, headers):
+    def bearer_authorized(self, headers):
         expected = self.token()
-        if not expected:
-            return False
         auth = headers.get("Authorization", "")
-        if not auth.startswith("Bearer "):
+        return bool(expected) and auth.startswith("Bearer ") and hmac.compare_digest(
+            auth[7:].strip().encode("utf-8"), expected.encode("utf-8")
+        )
+
+    def session_cookie(self, token, remember):
+        age = SESSION_MAX_AGE if remember else SESSION_BROWSER_AGE
+        payload = "%d.%s" % (int(time.time()) + age, secrets.token_hex(16))
+        signature = self.sign_session(token, payload)
+        cookie = "%s=%s.%s; HttpOnly; Secure; SameSite=Strict" % (
+            SESSION_COOKIE, payload, signature
+        )
+        if remember:
+            cookie += "; Max-Age=%d" % age
+        # The login URL is /api/session. The default cookie path covers /api
+        # and also works when Apache mounts the console under a URL prefix.
+        return cookie
+
+    @staticmethod
+    def sign_session(token, payload):
+        return hmac.digest(
+            token.encode("utf-8"), b"ovirt-backup-session-v1:" + payload.encode("ascii"),
+            "sha256",
+        ).hex()
+
+    def authorized(self, headers):
+        if self.bearer_authorized(headers):
+            return True
+        token = self.token()
+        if not token:
             return False
-        return hmac.compare_digest(auth[7:].strip(), expected)
+        try:
+            cookie = SimpleCookie(headers.get("Cookie", "")).get(SESSION_COOKIE)
+        except CookieError:
+            return False
+        if cookie is None or not re.fullmatch(
+            r"[0-9]{1,12}\.[0-9a-f]{32}\.[0-9a-f]{64}", cookie.value
+        ):
+            return False
+        payload, signature = cookie.value.rsplit(".", 1)
+        if int(payload.split(".", 1)[0]) <= time.time():
+            return False
+        return hmac.compare_digest(signature, self.sign_session(token, payload))
 
     def _append_config_storage_checks(self, result):
         config_parent = self.config_path.parent
@@ -2389,12 +2431,15 @@ class Handler(BaseHTTPRequestHandler):
             "style-src 'self' 'unsafe-inline'; connect-src 'self'",
         )
 
-    def send_json(self, data, status=HTTPStatus.OK):
+    def send_json(self, data, status=HTTPStatus.OK, *, cookie=None):
         payload = json.dumps(
             data, ensure_ascii=False, sort_keys=True, default=str
         ).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        if cookie is not None:
+            self.send_header("Set-Cookie", cookie)
         self.send_header("Content-Length", str(len(payload)))
         self.security_headers()
         self.end_headers()
@@ -2452,6 +2497,10 @@ class Handler(BaseHTTPRequestHandler):
 
         if not self.app.authorized(self.headers):
             self.send_json({"error": "unauthorized"}, HTTPStatus.UNAUTHORIZED)
+            return
+
+        if path == "/api/session":
+            self.send_json({"ok": True})
             return
 
         try:
@@ -2554,12 +2603,49 @@ class Handler(BaseHTTPRequestHandler):
             LOG.exception("API request failed: %s", path)
             self.send_json({"error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
 
+    def handle_session(self):
+        if self.headers.get("X-oVirt-Console") != "1":
+            self.send_json({"error": "missing console request header"}, HTTPStatus.FORBIDDEN)
+            return
+        try:
+            body = self.read_json(max_bytes=4096)
+        except ValueError as exc:
+            self.send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
+
+        if body.get("action") == "logout":
+            self.send_json(
+                {"ok": True},
+                cookie=SESSION_COOKIE + "=; Max-Age=0; HttpOnly; Secure; SameSite=Strict",
+            )
+            return
+
+        supplied = body.get("token")
+        expected = self.app.token()
+        if not expected or not isinstance(supplied, str) or not hmac.compare_digest(
+            expected.encode("utf-8"), supplied.strip().encode("utf-8")
+        ):
+            self.send_json({"error": "invalid console token"}, HTTPStatus.UNAUTHORIZED)
+            return
+        self.send_json(
+            {"ok": True}, cookie=self.app.session_cookie(expected, body.get("remember") is True)
+        )
+
     def do_POST(self):
+        path = urlparse(self.path).path
+        if path == "/api/session":
+            self.handle_session()
+            return
+
         if not self.app.authorized(self.headers):
             self.send_json({"error": "unauthorized"}, HTTPStatus.UNAUTHORIZED)
             return
 
-        path = urlparse(self.path).path
+        if (self.headers.get("X-oVirt-Console") != "1"
+                and not self.app.bearer_authorized(self.headers)):
+            self.send_json({"error": "missing console request header"}, HTTPStatus.FORBIDDEN)
+            return
+
         try:
             body = self.read_json()
 
@@ -2699,6 +2785,25 @@ def self_test():
             % repo,
             encoding="utf-8",
         )
+
+        token_path = root / "web.token"
+        token_path.write_text("self-test-token", encoding="utf-8")
+        app = Application(
+            config_path, root, token_path, root, root, root, backup_dir,
+            root, root / "lock", root / "scheduler.sock",
+        )
+        cookie = app.session_cookie("self-test-token", remember=True)
+        cookie_header = cookie.split(";", 1)[0]
+        check(
+            "persistent console sign-in",
+            "Max-Age=2592000" in cookie
+            and "HttpOnly; Secure; SameSite=Strict" in cookie
+            and "self-test-token" not in cookie
+            and app.authorized({"Cookie": cookie_header})
+            and not app.authorized({"Cookie": cookie_header[:-1] + "!"}),
+        )
+        token_path.write_text("rotated-self-test-token", encoding="utf-8")
+        check("token rotation invalidates sessions", not app.authorized({"Cookie": cookie_header}))
 
         cp = read_config(config_path)
         merged = merge_settings(cp, {

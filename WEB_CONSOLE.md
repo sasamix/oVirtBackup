@@ -11,7 +11,7 @@ legacy `pioner` cron to the native timer.
 - Bind address: 127.0.0.1:8765.
 - Frontend: static HTML, CSS and JavaScript.
 - Publication: Apache reverse proxy at /ovirt-backup/.
-- API authentication: bearer token in /etc/ovirt-backup/web.token.
+- API authentication: bearer token or a signed browser session.
 - Canonical native configuration:
   /etc/ovirt-backup/config/backup.cfg.
 - Configuration history:
@@ -76,8 +76,12 @@ implemented separately from backup configuration so it can remain disabled
 while the legacy cron is still present.
 
 When /etc/ovirt-backup/web.token exists and is non-empty, every API request
-requires the HTTP header `Authorization: Bearer TOKEN`. The browser UI stores
-the token only in `sessionStorage`.
+accepts the HTTP header `Authorization: Bearer TOKEN` for scripts. In the
+browser, sign in with the token from `/etc/ovirt-backup/web.token` over HTTPS.
+The console sets a signed Secure, HttpOnly session cookie. The checked
+Remember me option keeps it for up to 30 days. Clearing the option limits it
+to the browser session and 12 hours. Sign out clears the cookie, and rotating
+the console token invalidates existing sessions.
 
 ## Configuration safety
 

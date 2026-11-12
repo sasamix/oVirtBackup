@@ -122,6 +122,7 @@ input[type=checkbox]{width:auto;transform:scale(1.1)}
     <span id="consoleVersion" class="pill muted">v…</span>
     <span id="engineBadge" class="pill muted">Engine …</span>
     <button class="action" onclick="refreshAll()" data-i18n="action.refresh">Refresh</button>
+    <button id="logoutButton" class="action" onclick="logout()" data-i18n="token.logout" hidden>Sign out</button>
   </div>
 </header>
 <div class="shell">
@@ -332,10 +333,16 @@ input[type=checkbox]{width:auto;transform:scale(1.1)}
 </dialog>
 
 <dialog id="tokenDialog">
-  <h2 data-i18n="token.title">Console token</h2>
-  <p class="muted" data-i18n="token.hint">Enter the token from /etc/ovirt-backup/web.token. It is kept only in this browser session.</p>
-  <input id="tokenInput" type="password" autocomplete="off">
-  <div class="row" style="margin-top:12px"><button class="action primary right" onclick="saveToken()" data-i18n="action.connect">Connect</button></div>
+  <form id="tokenForm" onsubmit="event.preventDefault(); saveToken()">
+    <h2 data-i18n="token.title">Sign in to the console</h2>
+    <label for="tokenInput" data-i18n="token.hint">Token from /etc/ovirt-backup/web.token</label>
+    <input id="tokenInput" type="password" autocomplete="off" required>
+    <div class="check-row"><input id="rememberLogin" type="checkbox" checked>
+      <label for="rememberLogin" data-i18n="token.remember">Remember me for 30 days</label>
+    </div>
+    <p id="tokenError" class="bad" role="alert" hidden></p>
+    <div class="row"><button id="tokenSubmit" class="action primary right" type="submit" data-i18n="action.connect">Connect</button></div>
+  </form>
 </dialog>
 
 <dialog id="outputDialog">
@@ -344,7 +351,8 @@ input[type=checkbox]{width:auto;transform:scale(1.1)}
 </dialog>
 
 <script>
-let token=sessionStorage.getItem("ovirtBackupToken")||"";
+let signedIn=false;
+try{sessionStorage.removeItem("ovirtBackupToken")}catch(_e){}
 let settingsData=null;
 let settingsOptions=null;
 let settingsLoadId=0;
@@ -388,7 +396,7 @@ const I18N={
     "restore.mode_original":"original — сохранённые MAC/профиль (DR)",
     "restore.warning":"Восстановление всегда создаёт новую VM и никогда не запускает её автоматически. Режим isolated с исходным MAC сохраняет старый MAC, но принудительно оставляет link отключённым; при конфликте MAC нужен Allow Duplicates в MAC pool. Режим original будет отклонён restore_native.py, пока исходная VM существует.",
     "action.preflight":"Предварительная проверка","action.execute_restore":"Выполнить восстановление",
-    "token.title":"Токен консоли","token.hint":"Введите токен из /etc/ovirt-backup/web.token. Он хранится только в этой сессии браузера.",
+    "token.title":"Вход в консоль","token.hint":"Токен из /etc/ovirt-backup/web.token",
     "action.connect":"Подключиться","action.close":"Закрыть","output.title":"Вывод",
     "state.connected":"Подключено","state.error":"Ошибка","state.free":"Свободно","state.busy":"ЗАНЯТО",
     "state.legacy":"LEGACY","state.inactive":"неактивен","state.running":"выполняется","state.complete":"завершено",
@@ -442,6 +450,10 @@ const I18N={
     "tip.count":"Количество дисков в копии",
     "tip.size":"Фактическое место, занятое образами дисков",
     "tip.copy_actions":"Восстановить или удалить эту копию",
+    "token.remember":"Запомнить вход на 30 дней",
+    "token.logout":"Выйти",
+    "token.invalid":"Неверный токен консоли.",
+    "token.cookie_failed":"Браузер не принял сессию. Откройте консоль по HTTPS и проверьте настройки cookie.",
     "log.title":"Журнал",
     "log.all":"Все события",
     "log.backup_tab":"Бэкап",
@@ -596,12 +608,16 @@ function statusClass(s){
 }
 async function api(path,options={}){
   const h=Object.assign({},options.headers||{});
-  if(token)h.Authorization="Bearer "+token;
+  h["X-oVirt-Console"]="1";
   const r=await fetch(path,Object.assign({},options,{headers:h}));
   if(r.status===401){
+    signedIn=false;
+    document.getElementById("logoutButton").hidden=true;
     const dlg=document.getElementById("tokenDialog");
     if(!dlg.open)dlg.showModal();
-    throw new Error("Unauthorized");
+    const error=new Error("Unauthorized");
+    error.status=401;
+    throw error;
   }
   let j={};
   try{j=await r.json()}catch(_e){}
@@ -619,11 +635,49 @@ async function post(path,data){
     body:JSON.stringify(data)
   });
 }
-function saveToken(){
-  token=document.getElementById("tokenInput").value.trim();
-  sessionStorage.setItem("ovirtBackupToken",token);
-  document.getElementById("tokenDialog").close();
-  refreshAll();
+async function saveToken(){
+  const input=document.getElementById("tokenInput");
+  const button=document.getElementById("tokenSubmit");
+  const message=document.getElementById("tokenError");
+  button.disabled=true;
+  message.hidden=true;
+  let accepted=false;
+  try{
+    await post("api/session",{
+      token:input.value.trim(),
+      remember:document.getElementById("rememberLogin").checked
+    });
+    accepted=true;
+    await api("api/session");
+    input.value="";
+    document.getElementById("tokenDialog").close();
+    signedIn=true;
+    document.getElementById("logoutButton").hidden=false;
+    refreshAll();
+  }catch(error){
+    message.textContent=error.status===401?
+      (accepted?staticText("token.cookie_failed","Browser rejected the session. Use HTTPS and check cookie settings."):
+        staticText("token.invalid","Invalid console token.")):error.message;
+    message.hidden=false;
+  }finally{
+    button.disabled=false;
+  }
+}
+async function logout(){
+  try{
+    await post("api/session",{action:"logout"});
+    location.reload();
+  }catch(error){alert(error.message)}
+}
+async function startConsole(){
+  try{
+    await api("api/session");
+    signedIn=true;
+    document.getElementById("logoutButton").hidden=false;
+    await refreshAll();
+  }catch(error){
+    if(error.status!==401)console.warn(error);
+  }
 }
 function kv(k,v){return '<div class="kv"><div class="muted">'+esc(k)+'</div><div>'+esc(v)+'</div></div>'}
 function showPage(id){
@@ -1219,6 +1273,7 @@ async function saveSettings(){
 }
 
 async function refreshAll(){
+  if(!signedIn)return;
   for(const fn of [loadOverview,loadOperation,loadBackups,loadVms,()=>loadLogs(currentLogKind),loadHealth,()=>loadScheduler(true),()=>loadSettings(document.getElementById("settings").classList.contains("active"))]){
     try{await fn()}catch(e){console.warn(e)}
   }
@@ -1252,12 +1307,13 @@ document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{
   if(b.dataset.page==="scheduler")loadScheduler(true).catch(console.warn);
   if(b.dataset.page==="settings")loadSettings().catch(console.warn);
 });
-refreshAll();
+startConsole();
 setInterval(()=>{
+  if(!signedIn)return;
   loadOverview().catch(()=>{});
   loadBackups().catch(()=>{});
 },30000);
-setInterval(()=>loadOperation().catch(()=>{}),3000);
+setInterval(()=>{if(signedIn)loadOperation().catch(()=>{})},3000);
 </script>
 </body>
 </html>
