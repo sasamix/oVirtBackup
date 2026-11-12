@@ -366,6 +366,7 @@ const I18N={
     "scheduler.disabled":"выключен","scheduler.enabled_state":"включён",
     "scheduler.validation_ok":"Расписание корректно: {calendar}",
     "scheduler.saved":"Настройки планировщика сохранены.",
+    "scheduler.drift":"Сохранённое состояние планировщика не совпадает с фактическим состоянием systemd timer. Нажмите «Сохранить», чтобы привести их в соответствие.",
     "scheduler.enable_confirm":"Включить native timer сейчас? Это допустимо только после cutover со старого cron.",
     "scheduler.load_error":"Не удалось загрузить планировщик: {error}",
     "scheduler.save_error":"Не удалось сохранить планировщик: {error}",
@@ -848,7 +849,11 @@ async function loadScheduler(fillForm=true){
   try{
     const d=await api("api/scheduler");
     renderScheduler(d,fillForm);
-    schedulerNotice("");
+    schedulerNotice(
+      d.in_sync===false?
+        staticText("scheduler.drift","Saved scheduler state differs from the actual systemd timer state. Press Save to reconcile."):"",
+      d.in_sync===false?"warn":"muted"
+    );
     return d;
   }catch(e){
     schedulerNotice(uiLang==="ru"?t("scheduler.load_error",{error:e.message}):("Cannot load scheduler: "+e.message),"bad");
