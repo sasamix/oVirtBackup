@@ -89,6 +89,13 @@ input[type=checkbox]{width:auto;transform:scale(1.1)}
     <div class="card"><h3>Native lock</h3><div id="lockState" class="big">…</div><div id="lockInfo" class="muted"></div></div>
     <div class="card"><h3>Scheduler</h3><div id="timerState" class="big">…</div><div id="timerInfo" class="muted"></div></div>
   </div>
+  <div class="section card">
+    <div class="section-title">
+      <div><h2 style="margin:0">Manual operation</h2><div id="operationMeta" class="muted">No console operation</div></div>
+      <span id="operationBadge" class="pill muted">Idle</span>
+    </div>
+    <pre id="operationLog" style="max-height:260px">No operation log.</pre>
+  </div>
   <div class="section">
     <div class="section-title"><h2>Recent backups</h2></div>
     <table><thead><tr><th>VM</th><th>Created</th><th>Status</th><th>Disks</th><th>Actual</th><th>Backup ID</th></tr></thead><tbody id="recentBody"></tbody></table>
@@ -103,7 +110,8 @@ input[type=checkbox]{width:auto;transform:scale(1.1)}
       <button class="action" onclick="selectAllVms(true)">Select all</button>
       <button class="action" onclick="selectAllVms(false)">Clear</button>
       <button class="action" onclick="useSelectedForConfig()">Use in Settings</button>
-      <button class="action primary" onclick="dryRunSelected()">Dry-run selected</button>
+      <button class="action" onclick="dryRunSelected()">Dry-run selected</button>
+      <button class="action primary" onclick="backupSelected()">Backup selected</button>
     </div>
   </div>
   <table>
@@ -114,7 +122,7 @@ input[type=checkbox]{width:auto;transform:scale(1.1)}
 
 <section id="backups" class="page">
   <div class="section-title"><h2>Backup repository</h2><span class="muted">manifest.json is the source of truth</span></div>
-  <table><thead><tr><th>VM</th><th>Directory</th><th>Status</th><th>Type</th><th>Disks</th><th>Actual</th><th>Checkpoint</th></tr></thead><tbody id="backupsBody"></tbody></table>
+  <table><thead><tr><th>VM</th><th>Directory</th><th>Status</th><th>Type</th><th>Disks</th><th>Actual</th><th>Checkpoint</th><th></th></tr></thead><tbody id="backupsBody"></tbody></table>
 </section>
 
 <section id="logs" class="page">
@@ -159,6 +167,28 @@ input[type=checkbox]{width:auto;transform:scale(1.1)}
 </main>
 </div>
 
+<dialog id="restoreDialog">
+  <div class="section-title"><h2 style="margin:0">Restore native backup</h2><button class="action" onclick="document.getElementById('restoreDialog').close()">Close</button></div>
+  <div id="restoreSource" class="notice muted"></div>
+  <div class="settings-grid">
+    <div class="field"><div class="field-label">Target VM name</div><input id="restoreTargetName" type="text"></div>
+    <div class="field"><div class="field-label">Cluster</div><select id="restoreCluster"></select></div>
+    <div class="field"><div class="field-label">Storage domain</div><select id="restoreStorage"></select></div>
+    <div class="field"><div class="field-label">Network mode</div>
+      <select id="restoreNetworkMode">
+        <option value="none">none — no NICs</option>
+        <option value="isolated" selected>isolated — new MAC, link down</option>
+        <option value="original">original — saved MAC/profile (DR)</option>
+      </select>
+    </div>
+  </div>
+  <div class="notice warn">Restore always creates a new VM and never starts it automatically. The original network mode is refused by restore_native.py while the source VM still exists.</div>
+  <div class="toolbar" style="justify-content:flex-end;margin-top:14px">
+    <button class="action" onclick="restorePreflight()">Preflight</button>
+    <button class="action primary" onclick="startRestore()">Execute restore</button>
+  </div>
+</dialog>
+
 <dialog id="tokenDialog">
   <h2>Console token</h2>
   <p class="muted">Enter the token from /etc/ovirt-backup/web.token. It is kept only in this browser session.</p>
@@ -176,6 +206,8 @@ let token=sessionStorage.getItem("ovirtBackupToken")||"";
 let settingsData=null;
 let currentLogKind="backup";
 let currentVms=[];
+let restoreBackupPath="";
+let restoreSourceVm="";
 
 const fmtBytes=n=>{
   if(n===null||n===undefined)return "—";
@@ -263,11 +295,17 @@ async function loadOverview(){
 }
 async function loadBackups(){
   const d=await api("api/backups?limit=250");
-  document.getElementById("backupsBody").innerHTML=d.backups.map(b=>
-    '<tr><td>'+esc(b.vm_name)+'</td><td>'+esc(b.directory)+'</td>'+
-    '<td class="'+statusClass(b.status)+'">'+esc(b.status)+'</td><td>'+esc(b.type)+'</td>'+
-    '<td>'+esc(b.disk_count)+'</td><td>'+fmtBytes(b.actual_size)+'</td><td>'+esc(b.checkpoint_id||"—")+'</td></tr>'
-  ).join("")||'<tr><td colspan="7" class="muted">No native backup manifests yet</td></tr>';
+  document.getElementById("backupsBody").innerHTML=d.backups.map(b=>{
+    const canRestore=String(b.status||"").toLowerCase()==="complete";
+    const action=canRestore?'<button class="action restore-btn" data-path="'+esc(encodeURIComponent(b.path||""))+'" data-vm="'+esc(encodeURIComponent(b.vm_name||""))+'">Restore…</button>':"";
+    return '<tr><td>'+esc(b.vm_name)+'</td><td>'+esc(b.directory)+'</td>'+
+      '<td class="'+statusClass(b.status)+'">'+esc(b.status)+'</td><td>'+esc(b.type)+(b.formats?.length?' · '+esc(b.formats.join(",")):'')+'</td>'+
+      '<td>'+esc(b.disk_count)+'</td><td>'+fmtBytes(b.actual_size)+'</td><td>'+esc(b.checkpoint_id||"—")+'</td><td>'+action+'</td></tr>';
+  }).join("")||'<tr><td colspan="8" class="muted">No native backup manifests yet</td></tr>';
+  document.querySelectorAll(".restore-btn").forEach(btn=>btn.onclick=()=>openRestoreDialog(
+    decodeURIComponent(btn.dataset.path||""),
+    decodeURIComponent(btn.dataset.vm||"")
+  ));
   document.getElementById("recentBody").innerHTML=d.backups.slice(0,10).map(b=>
     '<tr><td>'+esc(b.vm_name)+'</td><td>'+esc(b.directory)+'</td>'+
     '<td class="'+statusClass(b.status)+'">'+esc(b.status)+'</td><td>'+esc(b.disk_count)+'</td>'+
@@ -311,6 +349,20 @@ async function dryRunSelected(){
     document.getElementById("outputBox").textContent="ERROR: "+e.message+"\n"+JSON.stringify(e.data||{},null,2);
   }
 }
+async function backupSelected(){
+  const names=selectedVmNames();
+  if(!names.length){alert("Select at least one VM.");return}
+  if(!confirm("Start a real native FULL backup for: "+names.join(", ")+"?"))return;
+  try{
+    const d=await post("api/actions/backup",{vm_names:names});
+    showPage("dashboard");
+    await loadOperation();
+    alert("Backup operation started: "+(d.operation?.id||""));
+  }catch(e){
+    alert("Cannot start backup: "+e.message);
+  }
+}
+
 function useSelectedForConfig(){
   const names=selectedVmNames();
   if(!names.length){alert("Select at least one VM.");return}
@@ -389,6 +441,88 @@ function renderSettings(data){
     '<div class="card"><h3>Unmanaged existing settings</h3>'+
     Object.entries(unknown).map(([k,v])=>kv(k,v)).join("")+'</div>':"";
 }
+async function loadOperation(){
+  try{
+    const d=await api("api/operations/current");
+    const op=d.operation;
+    const badge=document.getElementById("operationBadge");
+    const meta=document.getElementById("operationMeta");
+    const log=document.getElementById("operationLog");
+    if(!op){
+      badge.textContent="Idle";badge.className="pill muted";
+      meta.textContent=d.lock?.busy?"Native lock busy: "+(d.lock.holder||""):"No console operation";
+      log.textContent="No operation log.";
+      return;
+    }
+    badge.textContent=op.status||"unknown";
+    badge.className="pill "+((op.status==="complete")?"good":(op.status==="failed"?"bad":"warn"));
+    const md=op.metadata||{};
+    meta.textContent=(op.kind||"operation")+" · "+(op.id||"")+
+      (md.target_name?" · target="+md.target_name:"")+
+      (md.vm_names?.length?" · "+md.vm_names.join(", "):"");
+    log.textContent=(op.log_tail||[]).join("\n")||("State: "+(op.status||"unknown"));
+    log.scrollTop=log.scrollHeight;
+  }catch(e){console.warn(e)}
+}
+
+async function openRestoreDialog(path,sourceVm){
+  restoreBackupPath=path;
+  restoreSourceVm=sourceVm||"restored-vm";
+  document.getElementById("restoreSource").textContent="Backup: "+path;
+  document.getElementById("restoreTargetName").value=restoreSourceVm+"_RESTORE_TEST";
+  try{
+    const opts=await api("api/restore-options");
+    const cluster=document.getElementById("restoreCluster");
+    cluster.innerHTML=(opts.clusters||[]).map(x=>'<option value="'+esc(x.name)+'">'+esc(x.name)+'</option>').join("");
+    if(opts.defaults?.cluster)cluster.value=opts.defaults.cluster;
+    const storage=document.getElementById("restoreStorage");
+    storage.innerHTML=(opts.storage_domains||[]).map(x=>
+      '<option value="'+esc(x.name)+'">'+esc(x.name)+(x.address?' · '+x.address:'')+'</option>'
+    ).join("");
+    if(opts.defaults?.storage_domain)storage.value=opts.defaults.storage_domain;
+    document.getElementById("restoreNetworkMode").value=opts.defaults?.network_mode||"isolated";
+    document.getElementById("restoreDialog").showModal();
+  }catch(e){
+    alert("Cannot load restore options: "+e.message);
+  }
+}
+function restoreRequest(){
+  return {
+    backup_dir:restoreBackupPath,
+    target_name:document.getElementById("restoreTargetName").value.trim(),
+    cluster:document.getElementById("restoreCluster").value,
+    storage_domain:document.getElementById("restoreStorage").value,
+    network_mode:document.getElementById("restoreNetworkMode").value
+  };
+}
+async function restorePreflight(){
+  const req=restoreRequest();
+  const dlg=document.getElementById("outputDialog");
+  document.getElementById("outputTitle").textContent="Restore preflight";
+  document.getElementById("outputBox").textContent="Running restore preflight…";
+  dlg.showModal();
+  try{
+    const d=await post("api/actions/restore-preflight",req);
+    document.getElementById("outputBox").textContent=d.output||"(no output)";
+  }catch(e){
+    document.getElementById("outputBox").textContent="ERROR: "+e.message+"\n"+JSON.stringify(e.data||{},null,2);
+  }
+}
+async function startRestore(){
+  const req=restoreRequest();
+  if(!req.target_name){alert("Target VM name is required.");return}
+  if(!confirm("Execute restore to a NEW VM named "+req.target_name+" on "+req.storage_domain+"? The VM will remain DOWN."))return;
+  try{
+    const d=await post("api/actions/restore",req);
+    document.getElementById("restoreDialog").close();
+    showPage("dashboard");
+    await loadOperation();
+    alert("Restore operation started: "+(d.operation?.id||""));
+  }catch(e){
+    alert("Cannot start restore: "+e.message);
+  }
+}
+
 async function loadSettings(){
   try{
     const d=await api("api/settings");
@@ -469,7 +603,7 @@ async function saveSettings(){
 }
 
 async function refreshAll(){
-  for(const fn of [loadOverview,loadBackups,loadVms,()=>loadLogs(currentLogKind),loadHealth,loadSettings]){
+  for(const fn of [loadOverview,loadOperation,loadBackups,loadVms,()=>loadLogs(currentLogKind),loadHealth,loadSettings]){
     try{await fn()}catch(e){console.warn(e)}
   }
 }
@@ -483,6 +617,7 @@ setInterval(()=>{
   loadOverview().catch(()=>{});
   loadBackups().catch(()=>{});
 },30000);
+setInterval(()=>loadOperation().catch(()=>{}),3000);
 </script>
 </body>
 </html>
