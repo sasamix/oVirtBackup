@@ -712,15 +712,33 @@ class LogProgress:
 
 
 def create_upload_transfer(connection, disk_id, cp):
-    transfers = connection.system_service().image_transfers_service()
+    system = connection.system_service()
+    transfers = system.image_transfers_service()
     policy = cp.get(
         "config", "imageio_timeout_policy", fallback="cancel"
     )
     timeout = cp.getint("config", "imageio_timeout", fallback=120)
 
+    # For restore uploads we may pin ImageIO to the host closest to the target
+    # storage. On srv00-data this avoids the extra srv03 -> NFS -> srv00 hop.
+    host_name = cp.get(
+        "config", "imageio_upload_host", fallback=""
+    ).strip()
+    transfer_host = None
+    if host_name:
+        host = find_exact(system.hosts_service(), host_name, "Host")
+        transfer_host = types.Host(id=host.id)
+        LOG.info(
+            "Pinning upload ImageTransfer for disk %s to host %s (%s)",
+            disk_id,
+            host.name,
+            host.id,
+        )
+
     transfer = transfers.add(
         types.ImageTransfer(
             disk=types.Disk(id=disk_id),
+            host=transfer_host,
             direction=types.ImageTransferDirection.UPLOAD,
             timeout_policy=types.ImageTransferTimeoutPolicy(policy),
         )
