@@ -1134,6 +1134,12 @@ def manifest_summary(path):
         "disk_count": len(files),
         "actual_size": actual,
         "virtual_size": virtual,
+        "formats": sorted({
+            str(item.get("format") or "").lower()
+            for item in files
+            if item.get("format")
+        }),
+        "duration_seconds": data.get("duration_seconds"),
     }
 
 
@@ -1230,6 +1236,133 @@ def tail_file(path, lines):
     return result["output"].splitlines()
 
 
+def atomic_write_json(path, data):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(".%s.tmp-%d-%d" % (
+        path.name, os.getpid(), time.time_ns()
+    ))
+    try:
+        fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o640)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(data, fh, indent=2, sort_keys=True, default=str)
+                fh.write("\n")
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(str(tmp), str(path))
+            dfd = os.open(str(path.parent), os.O_RDONLY)
+            try:
+                os.fsync(dfd)
+            finally:
+                os.close(dfd)
+        finally:
+            if tmp.exists():
+                tmp.unlink()
+    except Exception:
+        if tmp.exists():
+            tmp.unlink()
+        raise
+
+
+def atomic_write_text(path, text):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(".%s.tmp-%d-%d" % (
+        path.name, os.getpid(), time.time_ns()
+    ))
+    try:
+        fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o640)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(text)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(str(tmp), str(path))
+        finally:
+            if tmp.exists():
+                tmp.unlink()
+    except Exception:
+        if tmp.exists():
+            tmp.unlink()
+        raise
+
+
+def read_json_file(path):
+    try:
+        return json.loads(Path(path).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+
+
+def validate_vm_name(value, field="target_name"):
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError("%s is required" % field)
+    if len(text) > 255:
+        raise ValueError("%s is too long" % field)
+    if any(char in text for char in ("\n", "\r", "\x00")):
+        raise ValueError("%s contains invalid control characters" % field)
+    return text
+
+
+def resolve_backup_directory(cp, value):
+    root = get_backup_path(cp)
+    if root is None:
+        raise ValueError("backup_path is not configured")
+    root = root.resolve()
+    target = Path(str(value or "")).resolve()
+    if root != target and root not in target.parents:
+        raise ValueError("backup directory is outside configured repository")
+    if not target.is_dir():
+        raise ValueError("backup directory does not exist: %s" % target)
+    manifest = target / "manifest.json"
+    if not manifest.is_file():
+        raise ValueError("manifest.json is missing: %s" % target)
+    data = json.loads(manifest.read_text(encoding="utf-8"))
+    if data.get("status") != "complete":
+        raise ValueError(
+            "backup is not complete: status=%r" % data.get("status")
+        )
+    return target, data
+
+
+def restore_options(cp):
+    connection = connect_engine(cp)
+    try:
+        system = connection.system_service()
+        storages = sorted(
+            storage_domain_catalog(system).values(),
+            key=lambda item: (item.get("name") or "").lower(),
+        )
+        clusters = sorted(
+            [
+                {
+                    "id": cluster.id,
+                    "name": getattr(cluster, "name", None),
+                }
+                for cluster in system.clusters_service().list()
+            ],
+            key=lambda item: (item.get("name") or "").lower(),
+        )
+        return {
+            "storage_domains": storages,
+            "clusters": clusters,
+            "network_modes": ["none", "isolated", "original"],
+            "defaults": {
+                "storage_domain": cp.get(
+                    "config", "storage_domain", fallback=""
+                ).strip(),
+                "cluster": cp.get(
+                    "config", "cluster_name", fallback="Default"
+                ).strip(),
+                "network_mode": "isolated",
+            },
+        }
+    finally:
+        connection.close()
+
+
 def health(cp):
     result = config_checks(cp)
     checks = list(result["checks"])
@@ -1280,16 +1413,23 @@ class Application:
             static_dir,
             token_file,
             backup_script,
+            restore_script,
+            runner_script,
             config_backup_dir,
+            operation_dir,
             operation_lock):
         self.config_path = Path(config_path)
         self.static_dir = Path(static_dir)
         self.token_file = Path(token_file)
         self.backup_script = Path(backup_script)
+        self.restore_script = Path(restore_script)
+        self.runner_script = Path(runner_script)
         self.config_backup_dir = Path(config_backup_dir)
+        self.operation_dir = Path(operation_dir)
         self.operation_lock = Path(operation_lock)
         self.started = time.time()
         self.config_lock = threading.Lock()
+        self.operation_start_lock = threading.Lock()
 
     def config(self):
         return read_config(self.config_path)
@@ -1374,6 +1514,243 @@ class Application:
                 config_checks(saved)
             ),
         }
+
+    def current_operation(self, include_log=True):
+        pointer = self.operation_dir / "current"
+        try:
+            operation_id = pointer.read_text(encoding="utf-8").strip()
+        except FileNotFoundError:
+            return {
+                "active": False,
+                "operation": None,
+                "lock": operation_lock_state(self.operation_lock),
+            }
+
+        if not operation_id:
+            return {
+                "active": False,
+                "operation": None,
+                "lock": operation_lock_state(self.operation_lock),
+            }
+
+        state_path = self.operation_dir / ("%s.json" % operation_id)
+        state = read_json_file(state_path)
+        if state is None:
+            return {
+                "active": False,
+                "operation": None,
+                "error": "operation state is missing: %s" % state_path,
+                "lock": operation_lock_state(self.operation_lock),
+            }
+
+        if include_log:
+            state["log_tail"] = tail_file(state.get("log_path"), 160)
+
+        return {
+            "active": state.get("status") in ("starting", "running"),
+            "operation": state,
+            "lock": operation_lock_state(self.operation_lock),
+        }
+
+    def _start_operation(self, kind, command, metadata):
+        with self.operation_start_lock:
+            current = self.current_operation(include_log=False)
+            if current.get("active"):
+                op = current.get("operation") or {}
+                raise BusyOperationError(
+                    "console operation already active: %s %s"
+                    % (op.get("kind"), op.get("id"))
+                )
+
+            lock = operation_lock_state(self.operation_lock)
+            if lock.get("busy"):
+                raise BusyOperationError(
+                    "native operation is already active: %s"
+                    % (lock.get("holder") or "unknown holder")
+                )
+
+            if not self.runner_script.is_file():
+                raise RuntimeError(
+                    "operation runner not found: %s" % self.runner_script
+                )
+
+            self.operation_dir.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+            operation_id = "%s-%s-%d" % (stamp, kind, time.time_ns())
+            state_path = self.operation_dir / ("%s.json" % operation_id)
+            log_path = self.operation_dir / ("%s.log" % operation_id)
+
+            state = {
+                "id": operation_id,
+                "kind": kind,
+                "status": "starting",
+                "created_utc": datetime.now(timezone.utc).isoformat(),
+                "state_path": str(state_path),
+                "log_path": str(log_path),
+                "command": command,
+                "metadata": metadata or {},
+            }
+            atomic_write_json(state_path, state)
+            atomic_write_text(
+                self.operation_dir / "current",
+                operation_id + "\n",
+            )
+
+            runner_command = [
+                "/usr/bin/python3",
+                str(self.runner_script),
+                "--state",
+                str(state_path),
+                "--log",
+                str(log_path),
+                "--",
+            ] + command
+
+            try:
+                subprocess.Popen(
+                    runner_command,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    close_fds=True,
+                    start_new_session=True,
+                )
+            except Exception as exc:
+                state["status"] = "failed"
+                state["completed_utc"] = datetime.now(
+                    timezone.utc
+                ).isoformat()
+                state["runner_error"] = str(exc)
+                atomic_write_json(state_path, state)
+                raise
+
+            return {
+                "active": True,
+                "operation": state,
+                "lock": operation_lock_state(self.operation_lock),
+            }
+
+    def start_backup(self, vm_names):
+        cp = self.config()
+        merge_settings(cp, {})
+        if cp.getboolean("config", "dry_run", fallback=False):
+            raise ValueError(
+                "dry_run=True in configuration; disable it before Backup now"
+            )
+
+        names = parse_list(vm_names)
+        if len(names) > MAX_VMS:
+            raise ValueError("too many VM names")
+        if not self.backup_script.is_file():
+            raise RuntimeError(
+                "backup_native.py not found: %s" % self.backup_script
+            )
+
+        command = [
+            "/usr/bin/python3",
+            str(self.backup_script),
+            "-c",
+            str(self.config_path),
+        ]
+        if names:
+            command += [
+                "--vm-names",
+                json.dumps(names, ensure_ascii=False),
+            ]
+
+        return self._start_operation(
+            "backup",
+            command,
+            {
+                "vm_names": names,
+                "selection": "explicit" if names else "configured",
+            },
+        )
+
+    def _restore_command(self, request, execute):
+        cp = self.config()
+        backup_dir, manifest = resolve_backup_directory(
+            cp, request.get("backup_dir")
+        )
+        source_name = manifest.get("vm_name") or "restored-vm"
+        target_name = validate_vm_name(
+            request.get("target_name")
+            or (source_name + "_RESTORE_TEST")
+        )
+
+        storage = str(
+            request.get("storage_domain")
+            or cp.get("config", "storage_domain", fallback="")
+        ).strip()
+        if not storage:
+            raise ValueError("storage_domain is required")
+
+        cluster = str(
+            request.get("cluster")
+            or cp.get("config", "cluster_name", fallback="Default")
+        ).strip()
+        if not cluster:
+            raise ValueError("cluster is required")
+
+        network_mode = str(
+            request.get("network_mode") or "isolated"
+        ).strip().lower()
+        if network_mode not in ("none", "isolated", "original"):
+            raise ValueError("invalid network_mode")
+
+        if not self.restore_script.is_file():
+            raise RuntimeError(
+                "restore_native.py not found: %s" % self.restore_script
+            )
+
+        command = [
+            "/usr/bin/python3",
+            str(self.restore_script),
+            "-c",
+            str(self.config_path),
+            "--backup-dir",
+            str(backup_dir),
+            "--target-name",
+            target_name,
+            "--cluster",
+            cluster,
+            "--storage-domain",
+            storage,
+            "--network-mode",
+            network_mode,
+        ]
+        if execute:
+            command.append("--execute")
+
+        metadata = {
+            "backup_dir": str(backup_dir),
+            "source_vm_name": source_name,
+            "target_name": target_name,
+            "cluster": cluster,
+            "storage_domain": storage,
+            "network_mode": network_mode,
+        }
+        return command, metadata
+
+    def restore_preflight(self, request):
+        lock = operation_lock_state(self.operation_lock)
+        if lock.get("busy"):
+            raise BusyOperationError(
+                "native operation is already active: %s"
+                % (lock.get("holder") or "unknown holder")
+            )
+        command, metadata = self._restore_command(request, execute=False)
+        result = run_command(command, timeout=600)
+        return {
+            "ok": result["ok"],
+            "returncode": result["returncode"],
+            "output": result["output"],
+            "metadata": metadata,
+        }
+
+    def start_restore(self, request):
+        command, metadata = self._restore_command(request, execute=True)
+        return self._start_operation("restore", command, metadata)
 
     def native_dry_run(self, vm_names):
         lock = operation_lock_state(self.operation_lock)
@@ -1752,8 +2129,20 @@ def main():
         default="/usr/libexec/ovirt-backup/backup_native.py",
     )
     parser.add_argument(
+        "--restore-script",
+        default="/usr/libexec/ovirt-backup/restore_native.py",
+    )
+    parser.add_argument(
+        "--runner-script",
+        default="/usr/libexec/ovirt-backup/ovirt_backup_runner.py",
+    )
+    parser.add_argument(
         "--config-backup-dir",
         default=DEFAULT_CONFIG_BACKUP_DIR,
+    )
+    parser.add_argument(
+        "--operation-dir",
+        default="/var/lib/ovirt-backup/web-operations",
     )
     parser.add_argument(
         "--operation-lock",
@@ -1782,7 +2171,10 @@ def main():
         args.static_dir,
         args.token_file,
         args.backup_script,
+        args.restore_script,
+        args.runner_script,
         args.config_backup_dir,
+        args.operation_dir,
         args.operation_lock,
     )
     server = ThreadingHTTPServer((args.listen, args.port), Handler)
