@@ -172,11 +172,13 @@ def imageio_network_route(connection, transfer, cp):
 
     host_id = getattr(getattr(transfer, "host", None), "id", None)
     if not host_id:
-        raise RuntimeError(
+        LOG.warning(
             "imageio_network=%s is configured but ImageTransfer %s "
-            "does not report a host"
-            % (network_name, transfer.id)
+            "does not report a host; using Engine/default ImageIO route",
+            network_name,
+            transfer.id,
         )
+        return transfer.transfer_url, None, None
 
     system = connection.system_service()
     host_service = (
@@ -218,16 +220,16 @@ def imageio_network_route(connection, transfer, cp):
 
     addresses = sorted(set(addresses))
     if len(addresses) != 1:
-        raise RuntimeError(
-            "Host %s ImageTransfer %s: logical network %s must have "
-            "exactly one IPv4 address, found %r"
-            % (
-                getattr(host, "name", host_id),
-                transfer.id,
-                network_name,
-                addresses,
-            )
+        LOG.warning(
+            "Host %s ImageTransfer %s: logical network %s has %d usable "
+            "IPv4 addresses %r; using Engine/default ImageIO route",
+            getattr(host, "name", host_id),
+            transfer.id,
+            network_name,
+            len(addresses),
+            addresses,
         )
+        return transfer.transfer_url, None, None
 
     target_ip = addresses[0]
     parsed = urlsplit(transfer.transfer_url)
