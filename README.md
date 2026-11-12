@@ -1,3 +1,5 @@
+> **native-backup-v2:** This branch contains the native VM Backup API workflow. See [NATIVE_BACKUP_V2.md](NATIVE_BACKUP_V2.md) for the backup/restore design and [WEB_CONSOLE.md](WEB_CONSOLE.md) for the validated configuration console. The legacy stable workflow remains on branch `pioner`.
+
 # oVirtBackup
 
 > **native-backup-v2 branch:** the active implementation in this branch uses
