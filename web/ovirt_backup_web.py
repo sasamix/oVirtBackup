@@ -369,6 +369,13 @@ def merge_settings(cp, updates):
 
     existing, _secret_set = current_settings(cp)
     merged = dict(existing)
+    # current_settings() masks secrets for browser display. Server-side merge
+    # must retain the actual stored value unless the caller explicitly changes it.
+    for secret_key, secret_spec in SETTINGS_SCHEMA.items():
+        if secret_spec["type"] == "secret":
+            merged[secret_key] = cp.get(
+                "config", secret_key, fallback=""
+            )
     errors = {}
 
     for key, raw in updates.items():
