@@ -176,7 +176,6 @@ def validate_calendar(expr):
     result = run([
         "systemd-analyze",
         "calendar",
-        "--iterations=2",
         expr,
     ])
     if result.returncode != 0:
@@ -365,7 +364,7 @@ def validate_payload(payload):
         "calendar": expr,
         "calendar_detail": detail,
         "migration_guard": {
-            "blocked": bool(config["enabled"] and (cron or processes)),
+            "blocked": bool(cron or processes),
             "legacy_cron_entries": cron,
             "legacy_processes": processes,
         },
