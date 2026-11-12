@@ -9,8 +9,8 @@ select VM and disks
 -> VmBackupsService.add()
 -> wait for BackupPhase.READY
 -> save backup snapshot OVF
--> ImageTransfer DOWNLOAD to qcow2
--> qemu-img check
+-> ImageTransfer DOWNLOAD to sparse RAW
+-> validate RAW image metadata
 -> finalize ImageTransfer
 -> finalize VM Backup
 -> retention
@@ -20,6 +20,9 @@ The pioner branch remains the rollback path.
 ## Safety rules
 
 - Full backups only in the first implementation.
+- FULL backup disk artifacts are stored as sparse RAW. This avoids qcow2
+  random-read amplification when restoring from NFS. Incremental backup will
+  require qcow2 and is intentionally outside the current FULL-only flow.
 - A backup directory becomes complete only after Engine backup finalization.
 - In-progress directories end in .partial.
 - Failed runs are retained as .failed-* for diagnostics.
@@ -41,6 +44,8 @@ Safety defaults:
 - target VM name must not already exist;
 - disk and NIC entries are stripped from the saved OVF before VM creation;
 - backup disks are recreated and uploaded through ImageTransfer;
+- old completed qcow2 backups remain restorable; RAW and qcow2 are detected
+  from the backup file metadata at restore time;
 - restored disks are attached after upload;
 - no NICs are restored;
 - the VM is never started automatically;
@@ -65,3 +70,23 @@ started automatically in any mode.
 
 Native backups store NIC metadata in manifest.json so DHCP reservations tied to
 MAC addresses can be restored exactly.
+
+
+## ImageTransfer host selection
+
+When `imageio_network` is configured, native backup/restore automatically
+selects the oVirt host closest to each host-local NFS storage domain:
+
+- backup: each source disk is evaluated separately;
+- restore: the selected target storage domain is evaluated;
+- `storage.address` is matched to the IPv4 address of an UP oVirt host on
+  `imageio_network`;
+- if there is no unique match (for example an external Synology NFS server),
+  host selection is left to Engine instead of guessing.
+
+No fixed `imageio_download_host` or `imageio_upload_host` setting is needed.
+
+Native backup and restore also share
+`/var/lib/ovirt-backup/operation.lock`, so two native heavy I/O operations
+do not run concurrently. The legacy `pioner` branch is intentionally
+unchanged during migration.
