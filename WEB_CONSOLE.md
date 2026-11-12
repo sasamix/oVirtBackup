@@ -34,6 +34,8 @@ Read operations:
 - GET /api/settings
 - GET /api/scheduler
 - GET /api/capabilities
+- GET /api/operations/current
+- GET /api/restore-options
 
 Validated write operations currently enabled:
 
@@ -41,9 +43,12 @@ Validated write operations currently enabled:
 - POST /api/settings
 - POST /api/settings/retention-preview
 - POST /api/actions/dry-run
+- POST /api/actions/backup
+- POST /api/actions/restore-preflight
+- POST /api/actions/restore
 
-Real backup, restore and scheduler mutation endpoints are intentionally not
-enabled yet.
+Manual native backup and restore actions are enabled. Scheduler mutation
+remains intentionally disabled.
 
 When /etc/ovirt-backup/web.token exists and is non-empty, every API request
 requires the HTTP header `Authorization: Bearer TOKEN`. The browser UI stores
@@ -109,6 +114,25 @@ blank-password preservation, atomic config replacement/config history and
 read-only retention preview. It does not connect to Engine and does not touch
 the live configuration or backup repository.
 
+## Manual operations
+
+The web console starts real native backup/restore work through
+`ovirt_backup_runner.py`. Each operation has a state JSON and a dedicated log
+under `/var/lib/ovirt-backup/web-operations/`.
+
+The runner invokes the existing `backup_native.py` or `restore_native.py`;
+it does not implement a second backup engine. Native flock serialization remains
+authoritative.
+
+A manual backup is refused while `dry_run=True` in the saved configuration.
+Restore offers a separate preflight action and requires an explicit confirmation
+before execute. Restore still creates a new VM, never starts it automatically,
+and uses the existing `none` / `isolated` / `original` network rules.
+
+The web systemd unit uses `KillMode=process` so restarting only the web console
+does not terminate a runner that already launched a native operation. Operation
+state remains available after the console comes back.
+
 ## Target RPM layout
 
 ```text
@@ -117,9 +141,11 @@ the live configuration or backup repository.
 /usr/libexec/ovirt-backup/backup_native.py
 /usr/libexec/ovirt-backup/restore_native.py
 /usr/libexec/ovirt-backup/ovirt_backup_web.py
+/usr/libexec/ovirt-backup/ovirt_backup_runner.py
 /usr/share/ovirt-backup/web/index.html
 /var/lib/ovirt-backup/
 /var/lib/ovirt-backup/config-backups/
+/var/lib/ovirt-backup/web-operations/
 /var/log/ovirt-backup/
 /usr/lib/systemd/system/ovirt-backup.service
 /usr/lib/systemd/system/ovirt-backup.timer
