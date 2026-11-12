@@ -550,12 +550,27 @@ def disk_storage_domain_ids(connection, disk):
     try:
         profile = connection.follow_link(profile_ref)
     except Exception:
-        LOG.exception(
-            "Cannot follow disk profile %s for disk %s",
+        LOG.warning(
+            "Cannot follow disk profile %s for disk %s; "
+            "trying DiskProfilesService",
             profile_id,
             getattr(disk, "id", None),
+            exc_info=True,
         )
-        return []
+        try:
+            profile = (
+                connection.system_service()
+                .disk_profiles_service()
+                .disk_profile_service(profile_id)
+                .get()
+            )
+        except Exception:
+            LOG.exception(
+                "Cannot resolve disk profile %s for disk %s",
+                profile_id,
+                getattr(disk, "id", None),
+            )
+            return []
 
     storage_ref = getattr(profile, "storage_domain", None)
     storage_id = getattr(storage_ref, "id", None)
