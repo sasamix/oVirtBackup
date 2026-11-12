@@ -203,3 +203,10 @@ addresses and resolves the MAC pool used by the target cluster. If a saved MAC
 is already in use, restore is allowed only when that MAC pool has
 `allow_duplicates=true`; otherwise preflight fails before disks are uploaded
 or a VM is created. The restored VM is never auto-started.
+
+
+## Console build identification
+
+The header shows the console semantic version and, when running from a live Git
+checkout, the short Git commit. This makes it possible to verify the exact code
+currently served without opening the repository on the host.
