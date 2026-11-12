@@ -288,8 +288,18 @@ def qemu_info(path):
     )
 
 
-def qemu_check(path):
-    LOG.info("Checking backup image: %s", path)
+def qemu_check(path, info=None):
+    if info is None:
+        info = qemu_info(path)
+
+    fmt = (info.get("format") or "").lower()
+    if fmt == "raw":
+        if not info.get("virtual-size"):
+            raise RuntimeError("RAW backup image has invalid virtual size: %s" % path)
+        LOG.info("Validated RAW backup image metadata: %s", path)
+        return
+
+    LOG.info("Checking backup image with qemu-img: %s (format=%s)", path, fmt)
     subprocess.run(["qemu-img", "check", "-q", str(path)], check=True)
 
 
@@ -990,7 +1000,7 @@ def main():
             item["metadata"].get("interface"),
             item["ovf_boot_order"],
         )
-        qemu_check(item["path"])
+        qemu_check(item["path"], info)
 
     manifest_disk_ids = {item["source_id"] for item in disks}
     ovf_disk_ids = set(ovf_meta["source_disk_ids"])
