@@ -47,7 +47,8 @@ Safety defaults:
 - old completed qcow2 backups remain restorable; RAW and qcow2 are detected
   from the backup file metadata at restore time;
 - restored disks are attached after upload;
-- no NICs are restored;
+- NIC restore is explicit: none, isolated (new MAC/link down), or original
+  (saved MAC/profile for DR);
 - the VM is never started automatically;
 - restore state is recorded under `/var/lib/ovirt-backup/restores`;
 - failed restore resources are kept for diagnosis rather than deleted automatically.
