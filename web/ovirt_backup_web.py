@@ -752,10 +752,88 @@ def engine_summary(cp):
         }
 
 
-def list_vms(cp):
+def config_from_merged(cp, merged):
+    result = configparser.RawConfigParser()
+    result.add_section("config")
+    for key, value in cp.items("config"):
+        result.set("config", key, value)
+    for key, value in merged.items():
+        result.set("config", key, serialize_setting(key, value))
+    return result
+
+
+def storage_domain_catalog(system):
+    result = {}
+    for storage in system.storage_domains_service().list():
+        address = getattr(getattr(storage, "storage", None), "address", None)
+        result[storage.id] = {
+            "id": storage.id,
+            "name": getattr(storage, "name", None),
+            "status": str(getattr(storage, "status", None))
+            if getattr(storage, "status", None) is not None else None,
+            "type": str(getattr(storage, "type", None))
+            if getattr(storage, "type", None) is not None else None,
+            "address": address,
+            "available": getattr(storage, "available", None),
+        }
+    return result
+
+
+def vm_disk_details(connection, system, vm):
+    service = system.vms_service().vm_service(vm.id)
+    catalog = storage_domain_catalog(system)
+    items = []
+    for attachment in service.disk_attachments_service().list():
+        disk_id = attachment.disk.id
+        try:
+            disk = connection.follow_link(attachment.disk)
+        except Exception:
+            disk = system.disks_service().disk_service(disk_id).get()
+
+        storage_ids = []
+        for ref in getattr(disk, "storage_domains", None) or []:
+            if getattr(ref, "id", None) and ref.id not in storage_ids:
+                storage_ids.append(ref.id)
+        singular = getattr(getattr(disk, "storage_domain", None), "id", None)
+        if singular and singular not in storage_ids:
+            storage_ids.append(singular)
+
+        storages = []
+        for storage_id in storage_ids:
+            data = catalog.get(storage_id)
+            if data is None:
+                data = {
+                    "id": storage_id,
+                    "name": storage_id,
+                    "status": None,
+                    "type": None,
+                    "address": None,
+                    "available": None,
+                }
+            storages.append(data)
+
+        items.append({
+            "id": disk_id,
+            "alias": getattr(disk, "alias", None) or getattr(disk, "name", None),
+            "provisioned_size": getattr(disk, "provisioned_size", None),
+            "actual_size": getattr(disk, "actual_size", None),
+            "format": str(getattr(disk, "format", None))
+            if getattr(disk, "format", None) is not None else None,
+            "sparse": getattr(disk, "sparse", None),
+            "bootable": bool(getattr(attachment, "bootable", False)),
+            "active": bool(getattr(attachment, "active", False)),
+            "interface": str(getattr(attachment, "interface", None))
+            if getattr(attachment, "interface", None) is not None else None,
+            "storage_domains": storages,
+        })
+    return items
+
+
+def list_vms(cp, details=True):
     connection = connect_engine(cp)
     try:
-        service = connection.system_service().vms_service()
+        system = connection.system_service()
+        service = system.vms_service()
         items = []
         for vm in service.list(max=MAX_VMS):
             cores = None
@@ -765,16 +843,230 @@ def list_vms(cp):
                     * (vm.cpu.topology.sockets or 1)
                     * (vm.cpu.topology.threads or 1)
                 )
-            items.append({
+            item = {
                 "id": vm.id,
                 "name": vm.name,
                 "status": str(vm.status) if vm.status is not None else None,
                 "memory": vm.memory,
                 "cpu_cores": cores,
-            })
+            }
+            if details:
+                try:
+                    item["disks"] = vm_disk_details(connection, system, vm)
+                except Exception as exc:
+                    item["disks"] = []
+                    item["disk_error"] = str(exc)
+            items.append(item)
         return sorted(items, key=lambda item: item["name"].lower())
     finally:
         connection.close()
+
+
+def resolve_selected_vms(system, cp):
+    vms_service = system.vms_service()
+    all_vms = vms_service.list(max=MAX_VMS)
+    by_name = {vm.name: vm for vm in all_vms}
+
+    if cp.getboolean("config", "all_vms", fallback=False):
+        selected = sorted(by_name)
+    else:
+        tag = cp.get("config", "vm_tag", fallback="").strip().strip('"')
+        if tag:
+            selected = sorted(
+                vm.name
+                for vm in vms_service.list(max=MAX_VMS, search="tag=%s" % tag)
+            )
+        else:
+            skip = set(parse_list(cp.get("config", "vm_names_skip", fallback="[]")))
+            if skip:
+                selected = sorted(name for name in by_name if name not in skip)
+            else:
+                selected = parse_list(cp.get("config", "vm_names", fallback="[]"))
+
+    missing = [name for name in selected if name not in by_name]
+    return selected, missing
+
+
+def config_checks(cp):
+    checks = []
+
+    def add(name, ok, detail, **extra):
+        item = {"name": name, "ok": bool(ok), "detail": str(detail)}
+        item.update(extra)
+        checks.append(item)
+
+    verify_tls = cp.getboolean("config", "verify_tls", fallback=True)
+    ca_file = cp.get(
+        "config", "ca_file", fallback="/etc/pki/ovirt-engine/ca.pem"
+    )
+    if verify_tls:
+        ca_ok = os.path.isfile(ca_file) and os.access(ca_file, os.R_OK)
+        add("TLS CA", ca_ok, ca_file if ca_ok else "not readable: %s" % ca_file)
+    else:
+        add("TLS CA", True, "TLS verification disabled")
+
+    repo = repository_stats(cp)
+    add(
+        "Backup repository",
+        repo.get("exists", False),
+        repo.get("path") or "not configured",
+    )
+    must_mount = cp.getboolean(
+        "config", "backup_path_must_be_mount", fallback=True
+    )
+    add(
+        "Repository mount",
+        (not must_mount) or repo.get("mountpoint", False),
+        (
+            "mounted"
+            if repo.get("mountpoint")
+            else ("mount check disabled" if not must_mount else "not a mount point")
+        ),
+    )
+    add(
+        "Repository writable",
+        repo.get("writable", False),
+        "writable" if repo.get("writable") else "not writable",
+    )
+    if repo.get("free_bytes") is not None:
+        add(
+            "Repository free space",
+            repo["free_bytes"] > 0,
+            "%.2f GiB free" % (repo["free_bytes"] / 1024**3),
+        )
+
+    engine_data = {
+        "ok": False,
+        "selection": [],
+        "storage_domains": [],
+        "networks": [],
+    }
+    try:
+        connection = connect_engine(cp)
+        try:
+            system = connection.system_service()
+            api = system.get()
+            version = None
+            try:
+                v = api.product_info.version
+                version = ".".join(
+                    str(x)
+                    for x in (v.major, v.minor, v.build, v.revision)
+                    if x is not None
+                )
+            except Exception:
+                pass
+            add("Engine API", True, "API %s" % (version or "unknown"))
+
+            selected, missing = resolve_selected_vms(system, cp)
+            engine_data["selection"] = selected
+            add(
+                "VM selection",
+                bool(selected) and not missing,
+                (
+                    "%d VM(s): %s" % (len(selected), ", ".join(selected))
+                    if selected and not missing
+                    else (
+                        "missing VM(s): %s" % ", ".join(missing)
+                        if missing else "no VMs selected"
+                    )
+                ),
+            )
+
+            networks = [
+                {
+                    "id": network.id,
+                    "name": getattr(network, "name", None),
+                }
+                for network in system.networks_service().list()
+            ]
+            engine_data["networks"] = sorted(
+                networks, key=lambda item: (item["name"] or "").lower()
+            )
+            network_name = cp.get(
+                "config", "imageio_network", fallback=""
+            ).strip()
+            if network_name:
+                matches = [
+                    item for item in networks if item["name"] == network_name
+                ]
+                add(
+                    "ImageIO network",
+                    len(matches) == 1,
+                    (
+                        network_name
+                        if len(matches) == 1
+                        else "%r: found %d matches" % (network_name, len(matches))
+                    ),
+                )
+            else:
+                add(
+                    "ImageIO network",
+                    True,
+                    "not configured; Engine/default route will be used",
+                )
+
+            catalog = storage_domain_catalog(system)
+            engine_data["storage_domains"] = sorted(
+                catalog.values(),
+                key=lambda item: (item["name"] or "").lower(),
+            )
+            storage_name = cp.get(
+                "config", "storage_domain", fallback=""
+            ).strip()
+            if storage_name:
+                matches = [
+                    item for item in catalog.values()
+                    if item["name"] == storage_name
+                ]
+                add(
+                    "Restore storage domain",
+                    len(matches) == 1,
+                    (
+                        "%s (%s)" % (
+                            storage_name,
+                            matches[0].get("address") or "no address",
+                        )
+                        if len(matches) == 1
+                        else "%r: found %d matches" % (
+                            storage_name, len(matches)
+                        )
+                    ),
+                )
+            else:
+                add(
+                    "Restore storage domain",
+                    True,
+                    "not configured; restore must choose one explicitly",
+                )
+
+            cluster_name = cp.get(
+                "config", "cluster_name", fallback="Default"
+            ).strip()
+            clusters = system.clusters_service().list(
+                search="name=%s" % cluster_name
+            )
+            exact_clusters = [
+                cluster for cluster in clusters
+                if getattr(cluster, "name", None) == cluster_name
+            ]
+            add(
+                "Restore cluster",
+                len(exact_clusters) == 1,
+                "%s (%d match)" % (cluster_name, len(exact_clusters)),
+            )
+            engine_data["ok"] = True
+        finally:
+            connection.close()
+    except Exception as exc:
+        add("Engine API", False, str(exc))
+
+    return {
+        "ok": all(item["ok"] for item in checks),
+        "checks": checks,
+        "engine": engine_data,
+        "repository": repo,
+    }
 
 
 def manifest_summary(path):
@@ -836,46 +1128,42 @@ def tail_file(path, lines):
 
 
 def health(cp):
-    repo = repository_stats(cp)
-    engine = engine_summary(cp)
-    native_log = cp.get(
-        "config",
-        "native_logger_file_path",
-        fallback=cp.get("config", "logger_file_path", fallback=""),
-    )
-    checks = [
-        {
-            "name": "Engine API",
-            "ok": engine.get("ok", False),
-            "detail": (
-                "API %s, %.1f ms"
-                % (engine.get("api_version") or "unknown", engine.get("latency_ms", 0))
-                if engine.get("ok")
-                else engine.get("error")
-            ),
-        },
-        {
-            "name": "Backup repository",
-            "ok": repo.get("exists", False),
-            "detail": repo.get("path") or "not configured",
-        },
-        {
-            "name": "Repository mount",
-            "ok": repo.get("mountpoint", False),
-            "detail": "mounted" if repo.get("mountpoint") else "not a mount point",
-        },
-        {
-            "name": "Repository writable",
-            "ok": repo.get("writable", False),
-            "detail": "writable" if repo.get("writable") else "not writable",
-        },
-        {
-            "name": "Native log",
-            "ok": bool(native_log) and os.path.exists(native_log),
-            "detail": native_log or "not configured",
-        },
-    ]
-    return {"ok": all(item["ok"] for item in checks), "checks": checks}
+    result = config_checks(cp)
+    checks = list(result["checks"])
+
+    for label, key, fallback in (
+        (
+            "Backup log",
+            "native_logger_file_path",
+            "/var/log/ovirt-backup/backup-native.log",
+        ),
+        (
+            "Restore log",
+            "native_restore_logger_file_path",
+            "/var/log/ovirt-backup/restore-native.log",
+        ),
+    ):
+        path = cp.get("config", key, fallback=fallback)
+        checks.append({
+            "name": label,
+            "ok": bool(path) and os.path.exists(path),
+            "detail": path or "not configured",
+        })
+
+    lock = operation_lock_state()
+    checks.append({
+        "name": "Native operation lock",
+        "ok": True,
+        "detail": (
+            "busy: %s" % (lock.get("holder") or "native operation")
+            if lock.get("busy") else "free"
+        ),
+    })
+    return {
+        "ok": all(item["ok"] for item in checks if item["name"] != "Native operation lock"),
+        "checks": checks,
+        "lock": lock,
+    }
 
 
 class Application:
