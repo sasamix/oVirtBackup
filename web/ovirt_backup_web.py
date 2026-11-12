@@ -1363,6 +1363,36 @@ def restore_options(cp):
         connection.close()
 
 
+def legacy_backup_processes():
+    result = []
+    proc = Path("/proc")
+    if not proc.is_dir():
+        return result
+
+    for entry in proc.iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            raw = (entry / "cmdline").read_bytes()
+        except (FileNotFoundError, PermissionError, ProcessLookupError):
+            continue
+        if not raw:
+            continue
+        command = raw.replace(b"\x00", b" ").decode(
+            "utf-8", errors="replace"
+        ).strip()
+        if not command:
+            continue
+        if "backup_native.py" in command:
+            continue
+        if re.search(r"(^|[ /])backup\.py(?: |$)", command):
+            result.append({
+                "pid": int(entry.name),
+                "command": command,
+            })
+    return sorted(result, key=lambda item: item["pid"])
+
+
 def health(cp):
     result = config_checks(cp)
     checks = list(result["checks"])
@@ -1430,6 +1460,16 @@ class Application:
         self.started = time.time()
         self.config_lock = threading.Lock()
         self.operation_start_lock = threading.Lock()
+
+    def _ensure_no_legacy_backup(self):
+        legacy = legacy_backup_processes()
+        if legacy:
+            raise BusyOperationError(
+                "legacy backup.py is active: %s"
+                % ", ".join(
+                    "pid=%s" % item["pid"] for item in legacy
+                )
+            )
 
     def config(self):
         return read_config(self.config_path)
@@ -1631,6 +1671,7 @@ class Application:
             }
 
     def start_backup(self, vm_names):
+        self._ensure_no_legacy_backup()
         cp = self.config()
         merge_settings(cp, {})
         if cp.getboolean("config", "dry_run", fallback=False):
@@ -1749,6 +1790,7 @@ class Application:
         }
 
     def start_restore(self, request):
+        self._ensure_no_legacy_backup()
         command, metadata = self._restore_command(request, execute=True)
         return self._start_operation("restore", command, metadata)
 
@@ -1897,6 +1939,7 @@ class Handler(BaseHTTPRequestHandler):
                     "service": systemd_state("ovirt-backup.service"),
                     "timer": systemd_state("ovirt-backup.timer"),
                     "lock": operation_lock_state(self.app.operation_lock),
+                    "legacy_backup_processes": legacy_backup_processes(),
                     "packages": {
                         "ovirt_engine": rpm_version("ovirt-engine"),
                         "sdk": rpm_version("python3-ovirt-engine-sdk4"),
