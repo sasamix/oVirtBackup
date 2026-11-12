@@ -2187,6 +2187,12 @@ class Handler(BaseHTTPRequestHandler):
                 })
             else:
                 self.send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
+        except SchedulerControllerError as exc:
+            self.send_json(
+                {"error": str(exc)},
+                HTTPStatus.SERVICE_UNAVAILABLE
+                if exc.unavailable else HTTPStatus.CONFLICT,
+            )
         except Exception as exc:
             LOG.exception("API request failed: %s", path)
             self.send_json({"error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
