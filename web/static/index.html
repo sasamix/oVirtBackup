@@ -143,6 +143,7 @@ input[type=checkbox]{width:auto;transform:scale(1.1)}
     <div class="toolbar">
       <span class="pill good">Validated write mode</span>
       <button class="action" onclick="loadSettings()">Reload</button>
+      <button class="action" onclick="previewRetention()">Retention preview</button>
       <button class="action" onclick="validateSettings()">Validate</button>
       <button class="action primary" onclick="saveSettings()">Save</button>
     </div>
@@ -427,6 +428,26 @@ async function validateSettings(){
     return null;
   }
 }
+async function previewRetention(){
+  if(!settingsData){await loadSettings()}
+  try{
+    const d=await post("api/settings/retention-preview",{settings:collectSettings()});
+    const lines=[];
+    lines.push("Retention preview");
+    lines.push("Repository: "+(d.root||"not configured"));
+    lines.push("Would delete: "+(d.delete_count||0));
+    lines.push("Would keep: "+(d.keep_count||0));
+    lines.push("");
+    (d.delete||[]).forEach(x=>lines.push("DELETE  "+x.vm_name+"/"+x.directory+"  ["+(x.reasons||[]).join(", ")+"]"));
+    if(!(d.delete||[]).length)lines.push("No completed native backup directories would be deleted.");
+    document.getElementById("outputTitle").textContent="Retention preview — no files are changed";
+    document.getElementById("outputBox").textContent=lines.join("\n");
+    document.getElementById("outputDialog").showModal();
+  }catch(e){
+    renderValidationError(e);
+  }
+}
+
 async function saveSettings(){
   if(!settingsData){await loadSettings()}
   const validation=await validateSettings();
