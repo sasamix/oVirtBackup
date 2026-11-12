@@ -1935,6 +1935,10 @@ class Handler(BaseHTTPRequestHandler):
                 })
             elif path == "/api/settings":
                 self.send_json(settings_payload(cp, self.app.config_path))
+            elif path == "/api/operations/current":
+                self.send_json(self.app.current_operation())
+            elif path == "/api/restore-options":
+                self.send_json(restore_options(cp))
             elif path == "/api/scheduler":
                 self.send_json({
                     "service": systemd_state("ovirt-backup.service"),
@@ -1946,12 +1950,12 @@ class Handler(BaseHTTPRequestHandler):
                     "actions_enabled": True,
                     "settings_write": True,
                     "dry_run": True,
-                    "backup_now": False,
-                    "restore": False,
+                    "backup_now": True,
+                    "restore": True,
                     "scheduler_write": False,
                     "reason": (
-                        "Settings and dry-run are enabled. Backup/restore/scheduler "
-                        "write actions remain disabled until configuration UI validation."
+                        "Settings, dry-run, manual backup and restore are enabled. "
+                        "Scheduler write actions remain disabled."
                     ),
                 })
             else:
@@ -1988,6 +1992,22 @@ class Handler(BaseHTTPRequestHandler):
                 result = self.app.native_dry_run(body.get("vm_names", []))
                 status = HTTPStatus.OK if result["ok"] else HTTPStatus.BAD_GATEWAY
                 self.send_json(result, status)
+                return
+
+            if path == "/api/actions/backup":
+                result = self.app.start_backup(body.get("vm_names", []))
+                self.send_json(result, HTTPStatus.ACCEPTED)
+                return
+
+            if path == "/api/actions/restore-preflight":
+                result = self.app.restore_preflight(body)
+                status = HTTPStatus.OK if result["ok"] else HTTPStatus.BAD_GATEWAY
+                self.send_json(result, status)
+                return
+
+            if path == "/api/actions/restore":
+                result = self.app.start_restore(body)
+                self.send_json(result, HTTPStatus.ACCEPTED)
                 return
 
             self.send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
