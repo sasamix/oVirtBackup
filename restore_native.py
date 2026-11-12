@@ -665,6 +665,11 @@ def finalize_transfer(connection, transfer, disk_id, cp):
 def upload_image(connection, path, disk_id, cp):
     transfer = create_upload_transfer(connection, disk_id, cp)
     started = time.monotonic()
+    transfer_service = (
+        connection.system_service()
+        .image_transfers_service()
+        .image_transfer_service(transfer.id)
+    )
 
     try:
         signature = inspect.signature(imageio_client.upload)
@@ -687,8 +692,12 @@ def upload_image(connection, path, disk_id, cp):
                     "config", "imageio_progress_percent", fallback=5
                 ),
             )
+
+        # Do not force disk_is_zero=True. imageio documents that optimization
+        # as safe only for a new disk on file storage or a new qcow2 disk on
+        # block storage. Restores may create RAW disks on block storage.
         if "disk_is_zero" in signature.parameters:
-            kwargs["disk_is_zero"] = True
+            kwargs["disk_is_zero"] = False
 
         LOG.info("Uploading %s -> disk %s", path, disk_id)
         imageio_client.upload(
@@ -701,8 +710,23 @@ def upload_image(connection, path, disk_id, cp):
             ),
             **kwargs
         )
-    finally:
-        finalize_transfer(connection, transfer, disk_id, cp)
+    except Exception:
+        LOG.exception(
+            "Upload failed for disk %s; cancelling ImageTransfer %s",
+            disk_id,
+            transfer.id,
+        )
+        try:
+            transfer_service.cancel()
+        except sdk.NotFoundError:
+            pass
+        except Exception:
+            LOG.exception(
+                "Cannot cancel failed ImageTransfer %s", transfer.id
+            )
+        raise
+
+    finalize_transfer(connection, transfer, disk_id, cp)
 
     elapsed = time.monotonic() - started
     LOG.info(
