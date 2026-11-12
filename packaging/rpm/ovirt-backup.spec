@@ -1,5 +1,5 @@
 Name:           ovirt-backup-console
-Version:        %{?version_override}%{!?version_override:0.1.0}
+Version:        %{?version_override}%{!?version_override:0.2.0}
 Release:        0.1%{?dist}
 Summary:        Native oVirt VM backup tool and local web console
 License:        GPL-3.0-or-later
@@ -103,5 +103,11 @@ fi
 %dir %attr(0750,ovirt-backup,ovirt-backup) %{_localstatedir}/log/ovirt-backup
 
 %changelog
+* Thu Nov 12 2026 sasamix <asm@pioner.kz> - 0.2.0-0.1
+- Validated configuration console with atomic settings writes.
+- VM disk/storage inventory, native dry-run and retention preview.
+- Separate backup/restore logs and native operation lock status.
+- Canonical writable config isolated under /etc/ovirt-backup/config.
+
 * Thu Oct 08 2026 sasamix <asm@pioner.kz> - 0.1.0-0.1
 - Initial native VM Backup API implementation and read-only web console.
