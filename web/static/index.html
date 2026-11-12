@@ -196,7 +196,8 @@ async function api(path,options={}){
   if(token)h.Authorization="Bearer "+token;
   const r=await fetch(path,Object.assign({},options,{headers:h}));
   if(r.status===401){
-    document.getElementById("tokenDialog").showModal();
+    const dlg=document.getElementById("tokenDialog");
+    if(!dlg.open)dlg.showModal();
     throw new Error("Unauthorized");
   }
   let j={};
