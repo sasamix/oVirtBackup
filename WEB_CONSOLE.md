@@ -181,3 +181,25 @@ Real manual backup and restore actions use one confirmation before launch.
 After the operation is accepted, the console switches to Dashboard and shows
 the persistent operation state/log instead of displaying a second modal
 "operation started" alert.
+
+
+## Restore network modes and saved MAC addresses
+
+The restore UI exposes four network modes:
+
+- `none`: restore no NICs.
+- `isolated`: restore saved interface/profile with an Engine-assigned MAC and
+  force `linked=false`.
+- `isolated-original-mac`: restore the saved interface/profile and the exact
+  saved MAC address, but force `linked=false`. This is useful for a test or
+  staged restore that must keep guest licensing, DHCP reservations or other
+  MAC-bound identity without bringing the restored NIC onto the network.
+- `original`: restore the saved MAC/profile and original link state for real
+  disaster recovery. This mode still refuses to run while the source VM exists
+  in the same Engine.
+
+For `isolated-original-mac`, preflight scans VM NICs for conflicting saved MAC
+addresses and resolves the MAC pool used by the target cluster. If a saved MAC
+is already in use, restore is allowed only when that MAC pool has
+`allow_duplicates=true`; otherwise preflight fails before disks are uploaded
+or a VM is created. The restored VM is never auto-started.
