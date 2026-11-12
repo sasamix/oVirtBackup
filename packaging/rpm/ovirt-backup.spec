@@ -1,5 +1,5 @@
 Name:           ovirt-backup-console
-Version:        %{?version_override}%{!?version_override:0.3.0}
+Version:        %{?version_override}%{!?version_override:0.4.0}
 Release:        0.1%{?dist}
 Summary:        Native oVirt VM backup tool and local web console
 License:        GPL-3.0-or-later
@@ -35,6 +35,8 @@ install -Dpm 0755 web/ovirt_backup_web.py \
     %{buildroot}%{_libexecdir}/ovirt-backup/ovirt_backup_web.py
 install -Dpm 0755 web/ovirt_backup_runner.py \
     %{buildroot}%{_libexecdir}/ovirt-backup/ovirt_backup_runner.py
+install -Dpm 0755 web/ovirt_backup_scheduler.py \
+    %{buildroot}%{_libexecdir}/ovirt-backup/ovirt_backup_scheduler.py
 install -Dpm 0644 web/static/index.html \
     %{buildroot}%{_datadir}/ovirt-backup/web/index.html
 
@@ -48,6 +50,8 @@ install -Dpm 0644 packaging/systemd/ovirt-backup.timer \
     %{buildroot}%{_unitdir}/ovirt-backup.timer
 install -Dpm 0644 packaging/systemd/ovirt-backup-web.service \
     %{buildroot}%{_unitdir}/ovirt-backup-web.service
+install -Dpm 0644 packaging/systemd/ovirt-backup-scheduler-control.service \
+    %{buildroot}%{_unitdir}/ovirt-backup-scheduler-control.service
 
 install -Dpm 0644 packaging/apache/ovirt-backup.conf \
     %{buildroot}%{_sysconfdir}/httpd/conf.d/ovirt-backup.conf
@@ -69,6 +73,7 @@ exit 0
 
 %post
 %systemd_post ovirt-backup-web.service
+%systemd_post ovirt-backup-scheduler-control.service
 %systemd_post ovirt-backup.timer
 if [ ! -s %{_sysconfdir}/ovirt-backup/web.token ]; then
     umask 027
@@ -80,10 +85,12 @@ fi
 
 %preun
 %systemd_preun ovirt-backup-web.service
+%systemd_preun ovirt-backup-scheduler-control.service
 %systemd_preun ovirt-backup.timer
 
 %postun
 %systemd_postun_with_restart ovirt-backup-web.service
+%systemd_postun_with_restart ovirt-backup-scheduler-control.service
 %systemd_postun ovirt-backup.timer
 
 %files
@@ -93,6 +100,7 @@ fi
 %{_libexecdir}/ovirt-backup/restore_native.py
 %{_libexecdir}/ovirt-backup/ovirt_backup_web.py
 %{_libexecdir}/ovirt-backup/ovirt_backup_runner.py
+%{_libexecdir}/ovirt-backup/ovirt_backup_scheduler.py
 %{_datadir}/ovirt-backup/web/index.html
 %dir %attr(0750,root,ovirt-backup) %{_sysconfdir}/ovirt-backup
 %dir %attr(0750,ovirt-backup,ovirt-backup) %{_sysconfdir}/ovirt-backup/config
@@ -103,6 +111,7 @@ fi
 %{_unitdir}/ovirt-backup.service
 %{_unitdir}/ovirt-backup.timer
 %{_unitdir}/ovirt-backup-web.service
+%{_unitdir}/ovirt-backup-scheduler-control.service
 %dir %attr(0750,ovirt-backup,ovirt-backup) %{_localstatedir}/lib/ovirt-backup
 %dir %attr(0750,ovirt-backup,ovirt-backup) %{_localstatedir}/lib/ovirt-backup/config-backups
 %dir %attr(0750,ovirt-backup,ovirt-backup) %{_localstatedir}/lib/ovirt-backup/web-operations
@@ -110,6 +119,11 @@ fi
 %dir %attr(0750,ovirt-backup,ovirt-backup) %{_localstatedir}/log/ovirt-backup
 
 %changelog
+* Fri Nov 13 2026 sasamix <asm@pioner.kz> - 0.4.0-0.1
+- Add safe scheduler configuration through a root-isolated Unix socket controller.
+- Add scheduler UI, migration guard, systemd timer drop-in management and status.
+- Keep legacy cron untouched and refuse native timer enablement before cutover.
+
 * Fri Nov 13 2026 sasamix <asm@pioner.kz> - 0.3.0-0.1
 - Original-MAC isolated restore mode and localized fixed console UI.
 - Console version and live Git build shown in header.
