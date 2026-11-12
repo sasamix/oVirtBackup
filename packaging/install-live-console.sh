@@ -22,6 +22,10 @@ OPERATIONS="$STATE_DIR/web-operations"
 RESTORES="$STATE_DIR/restores"
 LOG_DIR="/var/log/ovirt-backup"
 SERVICE="/etc/systemd/system/ovirt-backup-web.service"
+NATIVE_SERVICE="/etc/systemd/system/ovirt-backup.service"
+NATIVE_TIMER="/etc/systemd/system/ovirt-backup.timer"
+SCHEDULER_CONTROL="/etc/systemd/system/ovirt-backup-scheduler-control.service"
+SCHEDULER_SOCKET="/run/ovirt-backup/scheduler.sock"
 APACHE="/etc/httpd/conf.d/ovirt-backup.conf"
 
 echo "=== oVirt Backup Console live installer ==="
@@ -30,7 +34,7 @@ echo "Source config: $SOURCE_CONFIG"
 echo "Canonical config: $CONFIG"
 echo
 
-for file in     "$REPO_DIR/backup_native.py"     "$REPO_DIR/restore_native.py"     "$REPO_DIR/web/ovirt_backup_web.py"     "$REPO_DIR/web/ovirt_backup_runner.py"     "$REPO_DIR/web/static/index.html"
+for file in     "$REPO_DIR/backup_native.py"     "$REPO_DIR/restore_native.py"     "$REPO_DIR/web/ovirt_backup_web.py"     "$REPO_DIR/web/ovirt_backup_runner.py"     "$REPO_DIR/web/ovirt_backup_scheduler.py"     "$REPO_DIR/web/ovirt_backup_scheduler.py"     "$REPO_DIR/web/static/index.html"     "$REPO_DIR/packaging/systemd/ovirt-backup.timer"
 do
     if [ ! -f "$file" ]; then
         echo "ERROR: missing $file"
@@ -103,17 +107,74 @@ print("Runner self-test: OK")
 PY
 rm -rf "$RUNNER_TEST_DIR"
 
+echo
+echo "=== Scheduler controller self-test ==="
+runuser -u ovirt-backup -- /usr/bin/python3 \
+    "$REPO_DIR/web/ovirt_backup_scheduler.py" self-test
+
+cat > "$NATIVE_SERVICE" <<EOF
+[Unit]
+Description=oVirt Native VM Backup (live checkout)
+After=network-online.target remote-fs.target
+Wants=network-online.target
+ConditionPathExists=$CONFIG
+
+[Service]
+Type=oneshot
+User=ovirt-backup
+Group=ovirt-backup
+ExecStart=/usr/bin/python3 $REPO_DIR/backup_native.py -c $CONFIG
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=6
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadOnlyPaths=$CONFIG $REPO_DIR
+ReadWritePaths=$STATE_DIR $LOG_DIR
+EOF
+
+install -m 0644 "$REPO_DIR/packaging/systemd/ovirt-backup.timer" "$NATIVE_TIMER"
+
+cat > "$SCHEDULER_CONTROL" <<EOF
+[Unit]
+Description=oVirt Backup Scheduler Controller (live checkout)
+After=local-fs.target
+Before=ovirt-backup-web.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=/usr/bin/python3 $REPO_DIR/web/ovirt_backup_scheduler.py serve --socket $SCHEDULER_SOCKET
+Restart=on-failure
+RestartSec=2
+RuntimeDirectory=ovirt-backup
+RuntimeDirectoryMode=0750
+UMask=0007
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=$REPO_DIR
+ReadWritePaths=/etc/ovirt-backup /etc/systemd/system /run/ovirt-backup
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
 cat > "$SERVICE" <<EOF
 [Unit]
 Description=oVirt Backup Console (live checkout)
-After=network-online.target
-Wants=network-online.target
+After=network-online.target ovirt-backup-scheduler-control.service
+Wants=network-online.target ovirt-backup-scheduler-control.service
 
 [Service]
 Type=simple
 User=ovirt-backup
 Group=ovirt-backup
-ExecStart=/usr/bin/python3 $REPO_DIR/web/ovirt_backup_web.py --config $CONFIG --static-dir $REPO_DIR/web/static --token-file $TOKEN --backup-script $REPO_DIR/backup_native.py --restore-script $REPO_DIR/restore_native.py --runner-script $REPO_DIR/web/ovirt_backup_runner.py --config-backup-dir $CONFIG_BACKUPS --operation-dir $OPERATIONS --operation-lock $STATE_DIR/operation.lock --listen 127.0.0.1 --port 8765
+ExecStart=/usr/bin/python3 $REPO_DIR/web/ovirt_backup_web.py --config $CONFIG --static-dir $REPO_DIR/web/static --token-file $TOKEN --backup-script $REPO_DIR/backup_native.py --restore-script $REPO_DIR/restore_native.py --runner-script $REPO_DIR/web/ovirt_backup_runner.py --config-backup-dir $CONFIG_BACKUPS --operation-dir $OPERATIONS --operation-lock $STATE_DIR/operation.lock --scheduler-socket $SCHEDULER_SOCKET --listen 127.0.0.1 --port 8765
 Restart=on-failure
 RestartSec=3
 KillMode=process
@@ -129,8 +190,32 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
+
+# The scheduler controller is safe to enable now: it does not run backups.
+# The native backup timer itself is deliberately left exactly as-is until cutover.
+systemctl enable ovirt-backup-scheduler-control.service
+systemctl restart ovirt-backup-scheduler-control.service
+
+for attempt in $(seq 1 20); do
+    [ -S "$SCHEDULER_SOCKET" ] && break
+    sleep 0.1
+done
+if [ ! -S "$SCHEDULER_SOCKET" ]; then
+    echo "ERROR: scheduler controller socket did not appear: $SCHEDULER_SOCKET"
+    systemctl status ovirt-backup-scheduler-control.service --no-pager --full || true
+    journalctl -u ovirt-backup-scheduler-control.service -n 120 --no-pager || true
+    exit 1
+fi
+
 systemctl enable ovirt-backup-web.service
 systemctl restart ovirt-backup-web.service
+
+echo
+echo "=== Scheduler controller ==="
+systemctl status ovirt-backup-scheduler-control.service --no-pager --full || {
+    journalctl -u ovirt-backup-scheduler-control.service -n 100 --no-pager
+    exit 1
+}
 
 echo
 echo "=== Web service ==="
@@ -219,7 +304,8 @@ echo "Restore states:  $RESTORES"
 echo "Token file:      $TOKEN"
 echo
 echo "Legacy cron:     UNCHANGED"
-echo "Native timer:    UNCHANGED / NOT ENABLED BY THIS SCRIPT"
+echo "Native timer:    UNIT INSTALLED/UPDATED; ENABLE STATE UNCHANGED"
+echo "Scheduler ctrl:  enabled (controller only; it never starts a backup by itself)"
 echo
 echo "If Apache is active, open: https://$(hostname -f)/ovirt-backup/"
 echo "Use the token from: $TOKEN"
