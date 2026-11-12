@@ -105,3 +105,20 @@ Completed restore state JSON records total `duration_seconds`. Each restored
 disk records `upload_seconds` and `upload_virtual_mib_per_second`; the latter
 is based on the virtual image size, so it is directly comparable with ImageIO
 progress for sparse RAW images.
+
+
+## Network restore modes
+
+Native restore supports four NIC modes:
+
+- `none`: no NICs.
+- `isolated`: recreate NIC metadata with an Engine-assigned MAC and
+  `linked=false`.
+- `isolated-original-mac`: recreate NIC metadata with the saved MAC and
+  `linked=false`. If that MAC already exists in Engine, preflight requires
+  the target cluster MAC pool to allow duplicate MAC addresses.
+- `original`: disaster-recovery mode that restores the saved MAC/profile and
+  original link state; it is rejected while the source VM still exists in the
+  same Engine.
+
+The VM is never started automatically in any mode.
