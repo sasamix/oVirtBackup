@@ -1,7 +1,7 @@
 [Unit]
 Description=oVirt Backup Console
-After=network-online.target
-Wants=network-online.target
+After=network-online.target ovirt-backup-scheduler-control.service
+Wants=network-online.target ovirt-backup-scheduler-control.service
 
 [Service]
 Type=simple
