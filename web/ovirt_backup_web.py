@@ -1612,7 +1612,7 @@ def self_test():
             "all_vms=False\n"
             "server=https://engine.example/ovirt-engine/api\n"
             "username=admin@internal\n"
-            "password=s3cr%t-value\n"
+            "password=s3cr%%t-value\n"
             "backup_path=%s\n"
             "backup_path_must_be_mount=False\n"
             "verify_tls=False\n"
