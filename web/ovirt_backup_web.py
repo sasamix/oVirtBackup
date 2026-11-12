@@ -1166,12 +1166,27 @@ def health(cp):
     }
 
 
+class BusyOperationError(RuntimeError):
+    pass
+
+
 class Application:
-    def __init__(self, config_path, static_dir, token_file):
-        self.config_path = config_path
+    def __init__(
+            self,
+            config_path,
+            static_dir,
+            token_file,
+            backup_script,
+            config_backup_dir,
+            operation_lock):
+        self.config_path = Path(config_path)
         self.static_dir = Path(static_dir)
         self.token_file = Path(token_file)
+        self.backup_script = Path(backup_script)
+        self.config_backup_dir = Path(config_backup_dir)
+        self.operation_lock = Path(operation_lock)
         self.started = time.time()
+        self.config_lock = threading.Lock()
 
     def config(self):
         return read_config(self.config_path)
@@ -1191,9 +1206,83 @@ class Application:
             return False
         return hmac.compare_digest(auth[7:].strip(), expected)
 
+    def validate_settings(self, updates):
+        cp = self.config()
+        merged = merge_settings(cp, updates)
+        draft = config_from_merged(cp, merged)
+        result = config_checks(draft)
+        result["settings"] = {
+            key: ("" if SETTINGS_SCHEMA[key]["type"] == "secret" else value)
+            for key, value in merged.items()
+        }
+        return result
+
+    def save_settings(self, updates):
+        with self.config_lock:
+            cp = self.config()
+            merged = merge_settings(cp, updates)
+            backup = atomic_save_settings(
+                self.config_path,
+                merged,
+                self.config_backup_dir,
+            )
+            saved = self.config()
+
+        return {
+            "ok": True,
+            "backup": backup,
+            "settings": settings_payload(saved, self.config_path),
+            "checks": config_checks(saved),
+        }
+
+    def native_dry_run(self, vm_names):
+        lock = operation_lock_state(self.operation_lock)
+        if lock.get("busy"):
+            raise BusyOperationError(
+                "native operation is already active: %s"
+                % (lock.get("holder") or "unknown holder")
+            )
+
+        cp = self.config()
+        # Refuse to launch subprocess with a structurally invalid configuration.
+        merge_settings(cp, {})
+
+        names = parse_list(vm_names)
+        if not names:
+            raise SettingsValidationError({
+                "vm_names": "select at least one VM for dry-run"
+            })
+        if len(names) > MAX_VMS:
+            raise SettingsValidationError({
+                "vm_names": "too many VM names"
+            })
+
+        if not self.backup_script.is_file():
+            raise RuntimeError(
+                "backup_native.py not found: %s" % self.backup_script
+            )
+
+        args = [
+            "/usr/bin/python3",
+            str(self.backup_script),
+            "-c",
+            str(self.config_path),
+            "--dry-run",
+            "--vm-names",
+            json.dumps(names, ensure_ascii=False),
+        ]
+        result = run_command(args, timeout=300)
+        return {
+            "ok": result["ok"],
+            "returncode": result["returncode"],
+            "output": result["output"],
+            "vm_names": names,
+            "lock": operation_lock_state(self.operation_lock),
+        }
+
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "oVirtBackupConsole/0.1"
+    server_version = "oVirtBackupConsole/0.2"
 
     @property
     def app(self):
@@ -1222,6 +1311,25 @@ class Handler(BaseHTTPRequestHandler):
         self.security_headers()
         self.end_headers()
         self.wfile.write(payload)
+
+    def read_json(self, max_bytes=1024 * 1024):
+        raw_length = self.headers.get("Content-Length", "0")
+        try:
+            length = int(raw_length)
+        except ValueError:
+            raise ValueError("invalid Content-Length")
+        if length <= 0:
+            return {}
+        if length > max_bytes:
+            raise ValueError("request body is too large")
+        raw = self.rfile.read(length)
+        try:
+            data = json.loads(raw.decode("utf-8"))
+        except Exception as exc:
+            raise ValueError("invalid JSON: %s" % exc)
+        if not isinstance(data, dict):
+            raise ValueError("JSON body must be an object")
+        return data
 
     def serve_file(self, path):
         root = self.app.static_dir.resolve()
@@ -1271,6 +1379,7 @@ class Handler(BaseHTTPRequestHandler):
                     "backup_count": len(backups),
                     "service": systemd_state("ovirt-backup.service"),
                     "timer": systemd_state("ovirt-backup.timer"),
+                    "lock": operation_lock_state(self.app.operation_lock),
                     "packages": {
                         "ovirt_engine": rpm_version("ovirt-engine"),
                         "sdk": rpm_version("python3-ovirt-engine-sdk4"),
@@ -1280,24 +1389,35 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/health":
                 self.send_json(health(cp))
             elif path == "/api/vms":
-                self.send_json({"vms": list_vms(cp)})
+                details = query.get("details", ["1"])[0] not in ("0", "false", "False")
+                self.send_json({"vms": list_vms(cp, details=details)})
             elif path == "/api/backups":
                 vm_name = query.get("vm", [None])[0]
                 limit = int(query.get("limit", ["250"])[0])
                 self.send_json({"backups": scan_backups(cp, vm_name, limit)})
             elif path == "/api/logs":
                 lines = int(query.get("lines", ["400"])[0])
-                logfile = cp.get(
-                    "config",
-                    "native_logger_file_path",
-                    fallback=cp.get("config", "logger_file_path", fallback=""),
-                )
+                kind = query.get("kind", ["backup"])[0]
+                if kind == "restore":
+                    logfile = cp.get(
+                        "config",
+                        "native_restore_logger_file_path",
+                        fallback="/var/log/ovirt-backup/restore-native.log",
+                    )
+                else:
+                    kind = "backup"
+                    logfile = cp.get(
+                        "config",
+                        "native_logger_file_path",
+                        fallback="/var/log/ovirt-backup/backup-native.log",
+                    )
                 self.send_json({
+                    "kind": kind,
                     "path": logfile,
                     "lines": tail_file(logfile, lines),
                 })
             elif path == "/api/settings":
-                self.send_json({"settings": safe_settings(cp)})
+                self.send_json(settings_payload(cp, self.app.config_path))
             elif path == "/api/scheduler":
                 self.send_json({
                     "service": systemd_state("ovirt-backup.service"),
@@ -1305,9 +1425,17 @@ class Handler(BaseHTTPRequestHandler):
                 })
             elif path == "/api/capabilities":
                 self.send_json({
-                    "mode": "read-only",
-                    "actions_enabled": False,
-                    "reason": "Native backup/restore validation is not complete yet.",
+                    "mode": "configuration",
+                    "actions_enabled": True,
+                    "settings_write": True,
+                    "dry_run": True,
+                    "backup_now": False,
+                    "restore": False,
+                    "scheduler_write": False,
+                    "reason": (
+                        "Settings and dry-run are enabled. Backup/restore/scheduler "
+                        "write actions remain disabled until configuration UI validation."
+                    ),
                 })
             else:
                 self.send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
@@ -1319,20 +1447,74 @@ class Handler(BaseHTTPRequestHandler):
         if not self.app.authorized(self.headers):
             self.send_json({"error": "unauthorized"}, HTTPStatus.UNAUTHORIZED)
             return
-        self.send_json(
-            {
-                "error": "write actions are disabled in web console 0.1",
-                "mode": "read-only",
-            },
-            HTTPStatus.NOT_IMPLEMENTED,
-        )
+
+        path = urlparse(self.path).path
+        try:
+            body = self.read_json()
+
+            if path == "/api/settings/validate":
+                result = self.app.validate_settings(body.get("settings", {}))
+                self.send_json(result)
+                return
+
+            if path == "/api/settings":
+                result = self.app.save_settings(body.get("settings", {}))
+                self.send_json(result)
+                return
+
+            if path == "/api/actions/dry-run":
+                result = self.app.native_dry_run(body.get("vm_names", []))
+                status = HTTPStatus.OK if result["ok"] else HTTPStatus.BAD_GATEWAY
+                self.send_json(result, status)
+                return
+
+            self.send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
+        except SettingsValidationError as exc:
+            self.send_json(
+                {
+                    "error": "settings validation failed",
+                    "errors": exc.errors,
+                },
+                HTTPStatus.BAD_REQUEST,
+            )
+        except BusyOperationError as exc:
+            self.send_json(
+                {"error": str(exc)},
+                HTTPStatus.CONFLICT,
+            )
+        except ValueError as exc:
+            self.send_json(
+                {"error": str(exc)},
+                HTTPStatus.BAD_REQUEST,
+            )
+        except Exception as exc:
+            LOG.exception("POST request failed: %s", path)
+            self.send_json(
+                {"error": str(exc)},
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+            )
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default="/etc/ovirt-backup/backup.cfg")
+    parser.add_argument(
+        "--config",
+        default="/etc/ovirt-backup/config/backup.cfg",
+    )
     parser.add_argument("--static-dir", default="/usr/share/ovirt-backup/web")
     parser.add_argument("--token-file", default="/etc/ovirt-backup/web.token")
+    parser.add_argument(
+        "--backup-script",
+        default="/usr/libexec/ovirt-backup/backup_native.py",
+    )
+    parser.add_argument(
+        "--config-backup-dir",
+        default=DEFAULT_CONFIG_BACKUP_DIR,
+    )
+    parser.add_argument(
+        "--operation-lock",
+        default=DEFAULT_OPERATION_LOCK,
+    )
     parser.add_argument("--listen", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--debug", action="store_true")
@@ -1343,7 +1525,14 @@ def main():
         format="%(asctime)s %(levelname)s %(message)s",
     )
 
-    app = Application(args.config, args.static_dir, args.token_file)
+    app = Application(
+        args.config,
+        args.static_dir,
+        args.token_file,
+        args.backup_script,
+        args.config_backup_dir,
+        args.operation_lock,
+    )
     server = ThreadingHTTPServer((args.listen, args.port), Handler)
     server.app = app
     LOG.info("oVirt Backup Console listening on http://%s:%s", args.listen, args.port)
