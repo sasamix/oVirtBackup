@@ -8,6 +8,7 @@ no manual snapshot, no temporary cloned VM, no VM export.
 
 import argparse
 import configparser
+import fcntl
 import datetime as dt
 import inspect
 import json
@@ -30,6 +31,74 @@ from ovirt_imageio import client as imageio_client
 
 LOG = logging.getLogger("ovirt-native-backup")
 MAX_VMS = 400
+
+OPERATION_LOCK_PATH = "/var/lib/ovirt-backup/operation.lock"
+
+
+def acquire_operation_lock(label):
+    """
+    Serialize native backup and restore operations on this HostedEngine.
+
+    The kernel releases flock automatically if the process exits or crashes.
+    A second native operation waits instead of competing for storage/network.
+    """
+    os.makedirs(os.path.dirname(OPERATION_LOCK_PATH), exist_ok=True)
+    handle = open(OPERATION_LOCK_PATH, "a+", encoding="utf-8")
+
+    try:
+        try:
+            fcntl.flock(
+                handle.fileno(),
+                fcntl.LOCK_EX | fcntl.LOCK_NB,
+            )
+        except BlockingIOError:
+            handle.seek(0)
+            holder = handle.read().strip() or "unknown native operation"
+            LOG.warning(
+                "Another native backup/restore operation is active (%s); "
+                "waiting for %s",
+                holder,
+                OPERATION_LOCK_PATH,
+            )
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+
+        handle.seek(0)
+        handle.truncate()
+        handle.write(
+            "%s pid=%d started=%s\n"
+            % (
+                label,
+                os.getpid(),
+                time.strftime("%Y-%m-%d %H:%M:%S"),
+            )
+        )
+        handle.flush()
+
+        LOG.info(
+            "Acquired native backup/restore lock: %s",
+            OPERATION_LOCK_PATH,
+        )
+        return handle
+    except Exception:
+        handle.close()
+        raise
+
+
+def release_operation_lock(handle):
+    if handle is None:
+        return
+
+    try:
+        handle.seek(0)
+        handle.truncate()
+        handle.flush()
+    finally:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            handle.close()
+
+
 
 
 def cfg_json(cp, name, default):
@@ -491,7 +560,9 @@ def select_disks(system, vm_service, cp):
 
     for att in selected:
         disk_id = att.disk.id
-        disk = disks_service.disk_service(disk_id).get()
+        disk = disks_service.disk_service(disk_id).get(
+            follow="storage_domains"
+        )
         api_disks.append(types.Disk(id=disk_id))
         metadata.append({
             "id": disk_id,
@@ -1195,6 +1266,7 @@ def main():
     config_dry = cp.getboolean("config", "dry_run", fallback=False)
     dry_run = args.dry_run or config_dry
 
+    operation_lock = acquire_operation_lock("native-backup")
     connection = connect(cp)
     failures = []
     try:
@@ -1223,6 +1295,7 @@ def main():
         return 0
     finally:
         connection.close()
+        release_operation_lock(operation_lock)
 
 
 if __name__ == "__main__":
