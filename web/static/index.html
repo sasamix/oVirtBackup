@@ -104,7 +104,7 @@ input[type=checkbox]{width:auto;transform:scale(1.1)}
 .disk{margin-bottom:6px}.disk:last-child{margin-bottom:0}.storage{font-size:12px;color:var(--muted)}
 .code-id{font:12px ui-monospace,SFMono-Regular,Consolas,monospace;color:var(--muted)}
 .spinner{display:inline-block;width:12px;height:12px;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite}
-.scheduler-grid{grid-template-columns:repeat(4,minmax(0,1fr))}
+.scheduler-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
 .weekday-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:8px}
 .weekday-grid label{display:flex;align-items:center;gap:7px;padding:8px 9px;border:1px solid var(--line);border-radius:8px;background:var(--panel2)}
 @media(max-width:1100px){.scheduler-grid{grid-template-columns:repeat(2,1fr)}.weekday-grid{grid-template-columns:repeat(4,1fr)}}
@@ -220,7 +220,6 @@ input[type=checkbox]{width:auto;transform:scale(1.1)}
     <div class="section-title">
       <div>
         <h2 style="margin:0" data-i18n="scheduler.title">Native scheduler</h2>
-        <span class="muted" data-i18n="scheduler.subtitle">Configure the native systemd timer without changing legacy cron.</span>
       </div>
       <div class="toolbar">
         <button class="action" onclick="loadScheduler(true)" data-i18n="action.reload">Reload</button>
@@ -230,13 +229,17 @@ input[type=checkbox]{width:auto;transform:scale(1.1)}
     </div>
 
     <div id="schedulerNotice"></div>
+    <div id="schedulerGuard" class="notice warn" hidden>
+      <strong data-i18n="scheduler.guard_details">Enablement blocked</strong>
+      <div id="schedulerGuardInfo"></div>
+      <pre id="schedulerGuardDetails" hidden></pre>
+    </div>
   </div>
 
   <div class="grid scheduler-grid">
     <div class="card"><h3 data-i18n="scheduler.timer_state">Timer</h3><div id="schedulerTimerState" class="big">…</div><div id="schedulerTimerInfo" class="muted"></div></div>
     <div class="card"><h3 data-i18n="scheduler.next_run">Next run</h3><div id="schedulerNextRun" class="big">…</div><div id="schedulerCalendar" class="muted"></div></div>
     <div class="card"><h3 data-i18n="scheduler.last_run">Last trigger</h3><div id="schedulerLastRun" class="big">…</div><div id="schedulerServiceState" class="muted"></div></div>
-    <div class="card"><h3 data-i18n="scheduler.migration_guard">Migration guard</h3><div id="schedulerGuardState" class="big">…</div><div id="schedulerGuardInfo" class="muted"></div></div>
   </div>
 
   <div class="section card">
@@ -245,7 +248,7 @@ input[type=checkbox]{width:auto;transform:scale(1.1)}
         <div class="field-label" data-i18n="scheduler.enabled">Enable native timer</div>
         <div class="check-row">
           <input id="schedulerEnabled" type="checkbox">
-          <label for="schedulerEnabled" data-i18n="scheduler.enabled_hint">Enable only after legacy cron cutover</label>
+          <label for="schedulerEnabled" data-i18n="scheduler.enabled_hint">Run backups on this schedule</label>
         </div>
       </div>
       <div class="field">
@@ -276,10 +279,7 @@ input[type=checkbox]{width:auto;transform:scale(1.1)}
     </div>
   </div>
 
-  <div class="section">
-    <div class="section-title"><h2 data-i18n="scheduler.guard_details">Legacy guard details</h2></div>
-    <pre id="schedulerGuardDetails" data-i18n="scheduler.no_guard_details">No legacy cron/process detected.</pre>
-  </div>
+
 </section>
 
 <section id="settings" class="page">
@@ -464,19 +464,17 @@ const I18N={
     "field.no_options":"Нет доступных вариантов",
     "field.no_selection":"Не выбрано",
     "scheduler.title":"Планировщик native backup",
-    "scheduler.subtitle":"Настройка native systemd timer без изменения старого cron.",
     "scheduler.timer_state":"Timer","scheduler.next_run":"Следующий запуск","scheduler.last_run":"Последний запуск",
-    "scheduler.migration_guard":"Защита миграции","scheduler.enabled":"Включить native timer",
-    "scheduler.enabled_hint":"Включать только после отключения старого cron","scheduler.time":"Время запуска",
+    "scheduler.enabled":"Включить native timer",
+    "scheduler.enabled_hint":"Запускать резервное копирование по расписанию","scheduler.time":"Время запуска",
     "scheduler.timezone":"Часовой пояс","scheduler.random_delay":"Случайная задержка (секунд)",
-    "scheduler.weekdays":"Дни недели","scheduler.guard_details":"Состояние старого cron",
-    "scheduler.no_guard_details":"Старый cron/process не обнаружен.",
-    "scheduler.guard_clear":"Чисто","scheduler.guard_blocked":"БЛОКИРОВКА",
+    "scheduler.weekdays":"Дни недели","scheduler.guard_details":"Включение заблокировано",
     "scheduler.disabled":"выключен","scheduler.enabled_state":"включён",
     "scheduler.validation_ok":"Расписание корректно: {calendar}",
     "scheduler.saved":"Настройки планировщика сохранены.",
     "scheduler.drift":"Сохранённое состояние планировщика не совпадает с фактическим состоянием systemd timer. Нажмите «Сохранить», чтобы привести их в соответствие.",
-    "scheduler.enable_confirm":"Включить native timer сейчас? Это допустимо только после cutover со старого cron.",
+    "scheduler.legacy_detected":"Обнаружено старое задание cron или запущен legacy-бэкап.",
+    "scheduler.enable_confirm":"Включить запуск резервного копирования по расписанию?",
     "scheduler.load_error":"Не удалось загрузить планировщик: {error}",
     "scheduler.save_error":"Не удалось сохранить планировщик: {error}",
     "scheduler.validate_error":"Ошибка проверки планировщика: {error}",
@@ -1049,15 +1047,21 @@ function renderScheduler(data,fillForm=true){
   document.getElementById("schedulerLastRun").textContent=timer.last_trigger||"—";
   document.getElementById("schedulerServiceState").textContent=
     "service="+(timer.service_active_state||"—")+" · result="+(timer.service_result||"—");
-  document.getElementById("schedulerGuardState").textContent=guard.blocked?
-    staticText("scheduler.guard_blocked","BLOCKED"):staticText("scheduler.guard_clear","Clear");
-  document.getElementById("schedulerGuardState").className="big "+(guard.blocked?"warn":"good");
-  document.getElementById("schedulerGuardInfo").textContent=guard.reason||staticText("scheduler.no_guard_details","No legacy cron/process detected.");
-  const details=[];
-  (data.legacy_cron_entries||[]).forEach(x=>details.push("CRON  "+x.source+":"+x.line_number+"  "+x.line));
-  (data.legacy_processes||[]).forEach(x=>details.push("PROC  pid="+x.pid+"  "+x.command));
-  document.getElementById("schedulerGuardDetails").textContent=
-    details.join("\n")||staticText("scheduler.no_guard_details","No legacy cron/process detected.");
+  renderSchedulerGuard(guard,data.legacy_cron_entries,data.legacy_processes);
+}
+function renderSchedulerGuard(guard,cron=[],processes=[]){
+  document.getElementById("schedulerGuard").hidden=!guard.blocked;
+  const legacy=cron.length||processes.length;
+  document.getElementById("schedulerGuardInfo").textContent=legacy?
+    staticText("scheduler.legacy_detected","A legacy cron entry or backup process was detected."):
+    (guard.reason||guard.backup_config_guard?.reason||"");
+  const details=[
+    ...cron.map(x=>"CRON  "+x.source+":"+x.line_number+"  "+x.line),
+    ...processes.map(x=>"PROC  pid="+x.pid+"  "+x.command)
+  ];
+  const box=document.getElementById("schedulerGuardDetails");
+  box.hidden=!details.length;
+  box.textContent=details.join("\n");
 }
 async function loadScheduler(fillForm=true){
   try{
@@ -1077,6 +1081,8 @@ async function loadScheduler(fillForm=true){
 async function validateScheduler(){
   try{
     const d=await post("api/scheduler/validate",{scheduler:collectScheduler()});
+    const guard=d.migration_guard||{};
+    renderSchedulerGuard(guard,guard.legacy_cron_entries,guard.legacy_processes);
     schedulerNotice(
       uiLang==="ru"?t("scheduler.validation_ok",{calendar:d.calendar||""}):("Schedule is valid: "+(d.calendar||"")),
       d.migration_guard?.blocked?"warn":"good"
@@ -1090,8 +1096,8 @@ async function validateScheduler(){
 async function saveScheduler(){
   const cfg=collectScheduler();
   const validation=await validateScheduler();
-  if(!validation)return;
-  if(cfg.enabled && !confirm(staticText("scheduler.enable_confirm","Enable the native timer now? Do this only after legacy cron cutover.")))return;
+  if(!validation||(cfg.enabled&&validation.migration_guard?.blocked))return;
+  if(cfg.enabled && !confirm(staticText("scheduler.enable_confirm","Enable scheduled backups now?")))return;
   try{
     const d=await post("api/scheduler",{scheduler:cfg});
     renderScheduler(d,true);
