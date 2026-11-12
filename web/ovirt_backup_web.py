@@ -1348,7 +1348,12 @@ def restore_options(cp):
         return {
             "storage_domains": storages,
             "clusters": clusters,
-            "network_modes": ["none", "isolated", "original"],
+            "network_modes": [
+                "none",
+                "isolated",
+                "isolated-original-mac",
+                "original",
+            ],
             "defaults": {
                 "storage_domain": cp.get(
                     "config", "storage_domain", fallback=""
@@ -1736,7 +1741,12 @@ class Application:
         network_mode = str(
             request.get("network_mode") or "isolated"
         ).strip().lower()
-        if network_mode not in ("none", "isolated", "original"):
+        if network_mode not in (
+                "none",
+                "isolated",
+                "isolated-original-mac",
+                "original",
+        ):
             raise ValueError("invalid network_mode")
 
         if not self.restore_script.is_file():
