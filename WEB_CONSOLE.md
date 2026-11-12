@@ -166,3 +166,18 @@ available.
 
 This guard does not modify, signal or stop the legacy process and requires no
 change to branch `pioner` or its cron.
+
+
+## Browser localization and operation UX
+
+The static console chooses Russian when the browser's primary preferred language
+(`navigator.languages[0]` / `navigator.language`) is `ru` or a `ru-*`
+locale. Other browsers use English. Technical identifiers, VM names, storage
+domain names, paths, IDs and native logs are not rewritten.
+
+The top header is fixed while the page scrolls.
+
+Real manual backup and restore actions use one confirmation before launch.
+After the operation is accepted, the console switches to Dashboard and shows
+the persistent operation state/log instead of displaying a second modal
+"operation started" alert.
