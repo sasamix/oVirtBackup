@@ -12,6 +12,7 @@ Safety defaults:
 
 import argparse
 import configparser
+import fcntl
 import datetime as dt
 import inspect
 import io
@@ -35,6 +36,74 @@ from ovirt_imageio import client as imageio_client
 
 
 LOG = logging.getLogger("ovirt-native-restore")
+
+OPERATION_LOCK_PATH = "/var/lib/ovirt-backup/operation.lock"
+
+
+def acquire_operation_lock(label):
+    """
+    Serialize native backup and restore operations on this HostedEngine.
+
+    The kernel releases flock automatically if the process exits or crashes.
+    A second native operation waits instead of competing for storage/network.
+    """
+    os.makedirs(os.path.dirname(OPERATION_LOCK_PATH), exist_ok=True)
+    handle = open(OPERATION_LOCK_PATH, "a+", encoding="utf-8")
+
+    try:
+        try:
+            fcntl.flock(
+                handle.fileno(),
+                fcntl.LOCK_EX | fcntl.LOCK_NB,
+            )
+        except BlockingIOError:
+            handle.seek(0)
+            holder = handle.read().strip() or "unknown native operation"
+            LOG.warning(
+                "Another native backup/restore operation is active (%s); "
+                "waiting for %s",
+                holder,
+                OPERATION_LOCK_PATH,
+            )
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+
+        handle.seek(0)
+        handle.truncate()
+        handle.write(
+            "%s pid=%d started=%s\n"
+            % (
+                label,
+                os.getpid(),
+                time.strftime("%Y-%m-%d %H:%M:%S"),
+            )
+        )
+        handle.flush()
+
+        LOG.info(
+            "Acquired native backup/restore lock: %s",
+            OPERATION_LOCK_PATH,
+        )
+        return handle
+    except Exception:
+        handle.close()
+        raise
+
+
+def release_operation_lock(handle):
+    if handle is None:
+        return
+
+    try:
+        handle.seek(0)
+        handle.truncate()
+        handle.flush()
+    finally:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            handle.close()
+
+
 
 
 def load_config(path):
@@ -1143,6 +1212,7 @@ def main():
             % (sorted(manifest_disk_ids), sorted(ovf_disk_ids))
         )
 
+    operation_lock = acquire_operation_lock("native-restore")
     connection = connect(cp)
     try:
         system = connection.system_service()
@@ -1612,6 +1682,7 @@ def main():
         return 1
     finally:
         connection.close()
+        release_operation_lock(operation_lock)
 
 
 if __name__ == "__main__":
