@@ -1157,6 +1157,78 @@ def wait_vm_down(vm_service, timeout):
         time.sleep(1)
 
 
+
+def normalize_mac(address):
+    return str(address or "").strip().lower()
+
+
+def get_cluster_mac_pool(connection, system, cluster):
+    ref = getattr(cluster, "mac_pool", None)
+    pool_id = getattr(ref, "id", None)
+    if not pool_id:
+        raise RuntimeError(
+            "Target cluster %s has no MAC pool reference"
+            % getattr(cluster, "name", cluster.id)
+        )
+
+    try:
+        pool = connection.follow_link(ref)
+    except Exception:
+        pool = (
+            system.mac_pools_service()
+            .mac_pool_service(pool_id)
+            .get()
+        )
+
+    if pool is None:
+        raise RuntimeError(
+            "Cannot resolve MAC pool %s for target cluster %s"
+            % (pool_id, getattr(cluster, "name", cluster.id))
+        )
+    return pool
+
+
+def find_existing_mac_conflicts(vms_service, addresses):
+    wanted = {
+        normalize_mac(address)
+        for address in addresses
+        if normalize_mac(address)
+    }
+    conflicts = {address: [] for address in wanted}
+    if not wanted:
+        return conflicts
+
+    for vm in vms_service.list(max=10000):
+        try:
+            nics = (
+                vms_service.vm_service(vm.id)
+                .nics_service()
+                .list()
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                "Cannot inspect NICs of VM %s (%s) while checking saved MACs: %s"
+                % (getattr(vm, "name", vm.id), vm.id, exc)
+            ) from exc
+
+        for nic in nics:
+            address = normalize_mac(
+                getattr(getattr(nic, "mac", None), "address", None)
+            )
+            if address not in wanted:
+                continue
+            conflicts[address].append({
+                "vm_id": vm.id,
+                "vm_name": getattr(vm, "name", None),
+                "nic_id": nic.id,
+                "nic_name": getattr(nic, "name", None),
+                "linked": getattr(nic, "linked", None),
+                "plugged": getattr(nic, "plugged", None),
+            })
+
+    return conflicts
+
+
 def write_state(path, data):
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
@@ -1179,10 +1251,11 @@ def main():
     parser.add_argument("--storage-domain")
     parser.add_argument(
         "--network-mode",
-        choices=("none", "isolated", "original"),
+        choices=("none", "isolated", "isolated-original-mac", "original"),
         default="none",
         help=(
             "none: no NICs; isolated: restore NICs with new MACs and link down; "
+            "isolated-original-mac: restore saved MAC/profile but force link down; "
             "original: restore original MAC/profile for disaster recovery"
         ),
     )
@@ -1338,6 +1411,99 @@ def main():
                     meta.get("linked"),
                 )
 
+        mac_policy = {
+            "mode": args.network_mode,
+            "cluster_mac_pool_id": None,
+            "cluster_mac_pool_name": None,
+            "allow_duplicates": None,
+            "conflicts": {},
+        }
+
+        if args.network_mode == "isolated-original-mac":
+            saved_macs = [
+                normalize_mac(meta.get("mac"))
+                for meta in nic_meta
+                if normalize_mac(meta.get("mac"))
+            ]
+            conflicts = find_existing_mac_conflicts(
+                vms_service,
+                saved_macs,
+            )
+            pool = get_cluster_mac_pool(
+                connection,
+                system,
+                cluster,
+            )
+            allow_duplicates = bool(
+                getattr(pool, "allow_duplicates", False)
+            )
+            mac_policy.update({
+                "cluster_mac_pool_id": pool.id,
+                "cluster_mac_pool_name": getattr(pool, "name", None),
+                "allow_duplicates": allow_duplicates,
+                "conflicts": conflicts,
+            })
+
+            conflicting = {
+                mac: entries
+                for mac, entries in conflicts.items()
+                if entries
+            }
+            if conflicting and not allow_duplicates:
+                details = []
+                for mac, entries in sorted(conflicting.items()):
+                    users = ", ".join(
+                        "%s/%s"
+                        % (
+                            item.get("vm_name") or item["vm_id"],
+                            item.get("nic_name") or item["nic_id"],
+                        )
+                        for item in entries
+                    )
+                    details.append("%s used by %s" % (mac, users))
+                raise RuntimeError(
+                    "network-mode=isolated-original-mac requires duplicate "
+                    "MAC addresses, but target cluster MAC pool %s (%s) has "
+                    "allow_duplicates=False: %s. Enable Allow Duplicates for "
+                    "that MAC pool, remove the conflicting NIC/VM, or use "
+                    "network-mode=isolated for an Engine-assigned MAC."
+                    % (
+                        getattr(pool, "name", None) or pool.id,
+                        pool.id,
+                        "; ".join(details),
+                    )
+                )
+
+            if conflicting:
+                LOG.warning(
+                    "Original MAC restore is permitted because cluster MAC "
+                    "pool %s (%s) has allow_duplicates=True; duplicate MACs "
+                    "will remain forced link-down on the restored VM",
+                    getattr(pool, "name", None) or pool.id,
+                    pool.id,
+                )
+                for mac, entries in sorted(conflicting.items()):
+                    LOG.warning(
+                        "Saved MAC %s already exists on: %s",
+                        mac,
+                        ", ".join(
+                            "%s/%s"
+                            % (
+                                item.get("vm_name") or item["vm_id"],
+                                item.get("nic_name") or item["nic_id"],
+                            )
+                            for item in entries
+                        ),
+                    )
+            else:
+                LOG.info(
+                    "Saved MAC addresses are currently unused; cluster MAC "
+                    "pool %s (%s) allow_duplicates=%s",
+                    getattr(pool, "name", None) or pool.id,
+                    pool.id,
+                    allow_duplicates,
+                )
+
         if args.network_mode == "original":
             source_vm_id = manifest.get("vm_id")
             source_vm_exists = False
@@ -1403,6 +1569,7 @@ def main():
             "prepared_ovf": str(prepared_path),
             "final_ovf": str(final_ovf_path),
             "network_mode": args.network_mode,
+            "network_mac_policy": mac_policy,
             "network_interfaces_restored": False,
             "vm_started": False,
             "created_disks": [],
@@ -1624,12 +1791,20 @@ def main():
                         interface.lower()
                     )
 
-                if args.network_mode == "original":
+                if args.network_mode in (
+                        "original",
+                        "isolated-original-mac",
+                ):
                     kwargs["mac"] = types.Mac(address=meta["mac"])
-                    kwargs["linked"] = bool(
-                        meta.get("linked")
-                        if meta.get("linked") is not None else True
-                    )
+                    if args.network_mode == "original":
+                        kwargs["linked"] = bool(
+                            meta.get("linked")
+                            if meta.get("linked") is not None else True
+                        )
+                    else:
+                        # Preserve the saved MAC but keep the restored VM
+                        # electrically isolated from the logical network.
+                        kwargs["linked"] = False
                 else:
                     # Test restore: preserve profile/type but use a new MAC and
                     # force link down. The original MAC remains in manifest.
@@ -1688,15 +1863,41 @@ def main():
                 % (len(final_nics), expected_nics)
             )
 
-        if args.network_mode == "isolated":
+        if args.network_mode in (
+                "isolated",
+                "isolated-original-mac",
+        ):
             linked_nics = [
                 nic for nic in final_nics
                 if getattr(nic, "linked", None) is not False
             ]
             if linked_nics:
                 raise RuntimeError(
-                    "Safety check failed: isolated restore has %d NIC(s) "
-                    "with link not down" % len(linked_nics)
+                    "Safety check failed: %s restore has %d NIC(s) "
+                    "with link not down"
+                    % (args.network_mode, len(linked_nics))
+                )
+
+        if args.network_mode == "isolated-original-mac":
+            expected_macs = {
+                normalize_mac(meta.get("mac"))
+                for meta in nic_meta
+                if normalize_mac(meta.get("mac"))
+            }
+            restored_macs = {
+                normalize_mac(
+                    getattr(getattr(nic, "mac", None), "address", None)
+                )
+                for nic in final_nics
+            }
+            if restored_macs != expected_macs:
+                raise RuntimeError(
+                    "Safety check failed: restored MAC set differs from "
+                    "backup: expected=%s restored=%s"
+                    % (
+                        sorted(expected_macs),
+                        sorted(restored_macs),
+                    )
                 )
 
         restored_ids = {d["target_disk_id"] for d in state["created_disks"]}
