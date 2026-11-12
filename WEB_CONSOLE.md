@@ -1,9 +1,9 @@
 # oVirt Backup Console
 
 The native web console has validated configuration, inventory, retention
-preview, dry-run, manual backup and manual restore workflows. Scheduler
-configuration is the remaining migration step before switching from the legacy
-`pioner` cron to the native timer.
+preview, dry-run, manual backup, manual restore and scheduler configuration
+workflows. The remaining migration action is the explicit cutover from the
+legacy `pioner` cron to the native timer.
 
 ## Architecture
 
