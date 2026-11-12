@@ -2,6 +2,52 @@
 
 # oVirtBackup
 
+## Native backup v2 status
+
+The active `native-backup-v2` branch uses the official oVirt VM Backup API
+and ImageTransfer. FULL disk payloads are stored as sparse RAW files on a normal
+filesystem/NFS backup repository. Restore supports RAW and older qcow2 backup
+images.
+
+Validated workflows in this branch include:
+
+- per-storage-domain ImageTransfer host selection;
+- external NFS backup and restore;
+- persistent native backup/restore logging and metrics;
+- native operation locking;
+- web configuration validation and atomic config history;
+- VM/disk/storage inventory and native dry-run;
+- retention preview;
+- manual backup and restore through a persistent runner;
+- restore modes with new or saved MAC addresses;
+- browser-localized web UI;
+- safe systemd scheduler configuration with a legacy-cron migration guard.
+
+Canonical live configuration:
+
+```text
+/etc/ovirt-backup/config/backup.cfg
+```
+
+The stable legacy implementation remains unchanged on branch `pioner` as the
+rollback path. See `NATIVE_BACKUP_V2.md` and `WEB_CONSOLE.md` for the current
+native workflow.
+
+### Live console update
+
+For the migration installation used on HostedEngine, update the
+`native-backup-v2` checkout and run:
+
+```bash
+./packaging/install-live-console.sh
+```
+
+The live installer updates the web console, native service/timer unit files and
+the scheduler controller. It does **not** enable the native backup timer and it
+does **not** modify the legacy cron.
+
+---
+
 > **native-backup-v2 branch:** the active implementation in this branch uses
 > the official oVirt VM Backup API + ImageTransfer, stores FULL backup disks as
 > sparse RAW, and restores with automatic per-storage-domain ImageTransfer host
