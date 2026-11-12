@@ -786,9 +786,10 @@ def storage_domain_catalog(system):
     return result
 
 
-def vm_disk_details(connection, system, vm):
+def vm_disk_details(connection, system, vm, catalog=None):
     service = system.vms_service().vm_service(vm.id)
-    catalog = storage_domain_catalog(system)
+    if catalog is None:
+        catalog = storage_domain_catalog(system)
     items = []
     for attachment in service.disk_attachments_service().list():
         disk_id = attachment.disk.id
@@ -841,6 +842,7 @@ def list_vms(cp, details=True):
     try:
         system = connection.system_service()
         service = system.vms_service()
+        catalog = storage_domain_catalog(system) if details else None
         items = []
         for vm in service.list(max=MAX_VMS):
             cores = None
@@ -859,7 +861,9 @@ def list_vms(cp, details=True):
             }
             if details:
                 try:
-                    item["disks"] = vm_disk_details(connection, system, vm)
+                    item["disks"] = vm_disk_details(
+                        connection, system, vm, catalog=catalog
+                    )
                 except Exception as exc:
                     item["disks"] = []
                     item["disk_error"] = str(exc)
