@@ -310,6 +310,29 @@ def imageio_host_for_storage_domain(connection, storage_domain_id, cp):
         )
         return None
 
+    # Storage domains may be configured with an IPv4 address or a hostname.
+    # Resolve hostnames so a host-local NFS export still maps to the oVirt host
+    # owning that address on imageio_network.
+    storage_addresses = {storage_address}
+    try:
+        storage_addresses.update(
+            item[4][0]
+            for item in socket.getaddrinfo(
+                storage_address,
+                None,
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+            )
+            if item and item[4] and item[4][0]
+        )
+    except socket.gaierror as exc:
+        LOG.warning(
+            "Cannot resolve storage address %s for domain %s: %s",
+            storage_address,
+            getattr(storage_domain, "name", storage_domain_id),
+            exc,
+        )
+
     network_name = cp.get(
         "config", "imageio_network", fallback=""
     ).strip()
@@ -365,7 +388,7 @@ def imageio_host_for_storage_domain(connection, storage_domain_id, cp):
                 if address:
                     addresses.add(address)
 
-        if storage_address in addresses:
+        if storage_addresses.intersection(addresses):
             candidates.append(host)
 
     if len(candidates) != 1:
