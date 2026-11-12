@@ -210,9 +210,10 @@ let restoreBackupPath="";
 let restoreSourceVm="";
 
 
-const browserLanguages=(navigator.languages&&navigator.languages.length?navigator.languages:[navigator.language||"en"])
-  .map(x=>String(x).toLowerCase());
-const uiLang=browserLanguages.some(x=>x==="ru"||x.startsWith("ru-"))?"ru":"en";
+const browserLanguage=String(
+  (navigator.languages&&navigator.languages.length?navigator.languages[0]:navigator.language)||"en"
+).toLowerCase();
+const uiLang=(browserLanguage==="ru"||browserLanguage.startsWith("ru-"))?"ru":"en";
 document.documentElement.lang=uiLang;
 
 const I18N={
@@ -229,7 +230,7 @@ const I18N={
     "action.dry_run_selected":"Проверить выбранные","action.backup_selected":"Создать копию выбранных",
     "vms.title":"Виртуальные машины","vms.subtitle":"Инвентаризация Engine с дисками и хранилищами",
     "backups.title":"Хранилище резервных копий","backups.subtitle":"manifest.json — источник фактического состояния",
-    "action.backup":"Backup","action.restore":"Restore","action.reload":"Обновить",
+    "action.backup":"Резервное копирование","action.restore":"Восстановление","action.reload":"Обновить",
     "health.title":"Состояние",
     "settings.title":"Конфигурация native","settings.write_mode":"Проверяемый режим записи",
     "action.retention_preview":"Предпросмотр retention","action.validate":"Проверить","action.save":"Сохранить",
@@ -245,7 +246,8 @@ const I18N={
     "action.connect":"Подключиться","action.close":"Закрыть","output.title":"Вывод",
     "state.connected":"Подключено","state.error":"Ошибка","state.free":"Свободно","state.busy":"ЗАНЯТО",
     "state.legacy":"LEGACY","state.inactive":"неактивен","state.running":"выполняется","state.complete":"завершено",
-    "state.failed":"ошибка","state.no_native_operation":"Нет native-операции","state.no_manifests":"Нет manifest",
+    "state.failed":"ошибка","state.up":"включена","state.down":"выключена","state.locked":"заблокировано","state.active":"активно",
+    "state.no_native_operation":"Нет native-операции","state.no_manifests":"Нет manifest",
     "state.no_backups":"Native-копий пока нет","state.no_vms":"VM не найдены","state.storage_unknown":"хранилище не определено",
     "log.backup":"Журнал native backup","log.restore":"Журнал native restore",
     "dry.title":"Проверка native","dry.running":"Проверка выбранных VM: {vms}\n",
@@ -300,7 +302,8 @@ function applyI18n(){
 const STATUS_KEYS={
   connected:"state.connected",error:"state.error",free:"state.free",busy:"state.busy",
   legacy:"state.legacy",inactive:"state.inactive",running:"state.running",complete:"state.complete",
-  failed:"state.failed",idle:"state.idle"
+  failed:"state.failed",idle:"state.idle",up:"state.up",down:"state.down",locked:"state.locked",
+  image_locked:"state.locked",active:"state.active"
 };
 function localizedStatus(value){
   const raw=String(value??"");
@@ -318,7 +321,7 @@ const CHECK_NAMES_RU={
 function checkName(name){return uiLang==="ru"?(CHECK_NAMES_RU[name]||name):name}
 const SETTING_GROUP_RU={
   "Virtual machines":"Виртуальные машины","Engine":"Engine","Repository":"Хранилище","TLS":"TLS",
-  "Backup":"Backup","Image transfer":"Передача образов","Retention":"Retention","Disks":"Диски",
+  "Backup":"Резервное копирование","Image transfer":"Передача образов","Retention":"Хранение","Disks":"Диски",
   "Restore defaults":"Параметры восстановления","Logging":"Журналы","Safety":"Безопасность"
 };
 const SETTING_LABEL_RU={
@@ -338,6 +341,7 @@ const SETTING_LABEL_RU={
 };
 const SETTING_DESC_RU={
   vm_names:"Явный список VM. Используйте только один режим выбора.",
+  password:"Оставьте пустым, чтобы сохранить текущий пароль.",
   vm_names_skip:"Backup всех VM, кроме перечисленных.",
   vm_tag:"Backup VM с указанным тегом oVirt.",
   all_vms:"Backup всех VM, возвращаемых Engine.",
@@ -353,6 +357,10 @@ const SETTING_DESC_RU={
 function settingGroup(group){return uiLang==="ru"?(SETTING_GROUP_RU[group]||group):group}
 function settingLabel(spec){return uiLang==="ru"?(SETTING_LABEL_RU[spec.key]||spec.label||spec.key):(spec.label||spec.key)}
 function settingDescription(spec){return uiLang==="ru"?(SETTING_DESC_RU[spec.key]||spec.description||""):(spec.description||"")}
+function settingUnit(unit){
+  if(uiLang!=="ru")return unit;
+  return ({seconds:"секунд",days:"дней"}[unit]||unit);
+}
 applyI18n();
 if(uiLang==="ru"){
   const tableMaps=[
@@ -591,7 +599,7 @@ function renderSettings(data){
     '<div class="settings-group"><h2>'+esc(settingGroup(group))+'</h2><div class="settings-grid">'+
     specs.map(spec=>{
       const value=data.values?.[spec.key];
-      const unit=spec.unit?' <span class="unit">('+esc(spec.unit)+')</span>':'';
+      const unit=spec.unit?' <span class="unit">('+esc(settingUnit(spec.unit))+')</span>':'';
       const advanced=spec.advanced?' <span class="pill muted">'+esc(staticText("field.advanced","advanced"))+'</span>':'';
       const desc=settingDescription(spec);
       return '<div class="field"><div class="field-label">'+esc(settingLabel(spec))+unit+advanced+'</div>'+
