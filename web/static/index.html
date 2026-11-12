@@ -53,7 +53,8 @@ thead th{position:sticky;top:calc(var(--sticky-top) + var(--page-bar-height, 0px
 .backup-checkpoint summary{cursor:pointer;width:max-content}
 .backup-checkpoint code{overflow-wrap:anywhere}
 .backup-actions{text-align:right}
-.backup-action-buttons{display:flex;justify-content:flex-end;gap:6px}
+.backup-action-buttons{display:inline-grid;grid-template-columns:repeat(2,minmax(0,1fr));width:calc(16rem + 6px);max-width:100%;gap:6px}
+.backup-action-buttons .delete-backup-btn:only-child{grid-column:2}
 .backup-action-buttons button{white-space:nowrap}
 .backup-mobile-label{display:none}
 @media(max-width:800px){
@@ -64,7 +65,6 @@ thead th{position:sticky;top:calc(var(--sticky-top) + var(--page-bar-height, 0px
   .backup-copy{grid-column:span 2}
   .backup-state{text-align:right;overflow-wrap:normal}
   .backup-actions,.backup-empty{grid-column:1/-1}
-  .backup-action-buttons{flex-wrap:wrap}
   .backup-mobile-label{display:block;color:var(--muted);font-size:11px}
 }
 .vm-backup-flag{width:1%;text-align:center;white-space:nowrap}
@@ -416,7 +416,7 @@ const I18N={
     "table.created":"Создано","table.status":"Статус","table.disks":"Диски","table.actual":"Фактически",
     "table.name":"Имя","table.memory":"Память","table.disk_storage":"Диски / хранилище","table.directory":"Каталог",
     "table.type":"Тип","table.checkpoint":"Checkpoint",
-    "action.restore_more":"Восстановить…","field.enabled":"Включено","field.disabled":"Выключено",
+    "action.restore_more":"Восстановить","field.enabled":"Включено","field.disabled":"Выключено",
     "field.one_per_line":"По одному значению в строке","field.secret_stored":"Сохранён; оставьте пустым, чтобы не менять",
     "field.secret_enter":"Введите пароль","field.advanced":"дополнительно",
     "dashboard.operation_log":"Журнал операции",
@@ -426,7 +426,7 @@ const I18N={
     "log.backup_tab":"Бэкап",
     "log.no_entries":"Нет записей в журнале",
     "backup.delete_audit_error":"Копия удалена, но запись в историю удаления сохранить не удалось.",
-    "action.delete_backup":"Удалить…",
+    "action.delete_backup":"Удалить",
     "backup.delete_confirm":"Удалить копию {vm} / {directory} без возможности восстановления?",
     "backup.delete_done":"Копия удалена.",
     "backup.delete_error":"Ошибка удаления: {error}",
@@ -662,8 +662,8 @@ async function loadBackups(){
   body.innerHTML=d.backups.map(b=>{
     const canRestore=String(b.status||"").toLowerCase()==="complete";
     const pending=b.status==="delete_pending";
-    const action=canRestore?'<button class="action restore-btn" data-path="'+esc(encodeURIComponent(b.path||""))+'" data-vm="'+esc(encodeURIComponent(b.vm_name||""))+'">'+esc(staticText("action.restore_more","Restore…"))+'</button>':"";
-    const deleteAction=b.can_delete?'<button class="action danger delete-backup-btn" data-path="'+esc(encodeURIComponent(b.path))+'" data-vm="'+esc(b.vm_name)+'" data-directory="'+esc(b.directory)+'">'+esc(staticText("action.delete_backup","Delete…"))+'</button>':"";
+    const action=canRestore?'<button class="action restore-btn" data-path="'+esc(encodeURIComponent(b.path||""))+'" data-vm="'+esc(encodeURIComponent(b.vm_name||""))+'">'+esc(staticText("action.restore_more","Restore"))+'</button>':"";
+    const deleteAction=b.can_delete?'<button class="action danger delete-backup-btn" data-path="'+esc(encodeURIComponent(b.path))+'" data-vm="'+esc(b.vm_name)+'" data-directory="'+esc(b.directory)+'">'+esc(staticText("action.delete_backup","Delete"))+'</button>':"";
     const path=encodeURIComponent(b.path||"");
     const checkpoint=b.checkpoint_id?'<details class="backup-checkpoint" data-path="'+esc(path)+'"'+
       (expanded.has(path)?" open":"")+'><summary>Checkpoint</summary><code>'+esc(b.checkpoint_id)+'</code></details>':"";
