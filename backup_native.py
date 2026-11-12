@@ -520,7 +520,7 @@ def collect_nics(system, vm_service):
     return result
 
 
-def select_disks(system, vm_service, cp):
+def select_disks(connection, system, vm_service, cp):
     bootable_only = cp.getboolean("config", "bootable_only", fallback=False)
     include_inactive = cp.getboolean(
         "config", "with_disks_deactivated", fallback=False
@@ -560,9 +560,18 @@ def select_disks(system, vm_service, cp):
 
     for att in selected:
         disk_id = att.disk.id
-        disk = disks_service.disk_service(disk_id).get(
-            follow="storage_domains"
-        )
+        try:
+            # Disk attachment contains a link to the full disk resource.
+            # connection.follow_link() is compatible with older Engine/API
+            # versions where DiskService.get(follow="storage_domains") may
+            # return a non-XML error page.
+            disk = connection.follow_link(att.disk)
+        except Exception:
+            LOG.exception(
+                "Cannot follow disk link for %s; falling back to DiskService.get()",
+                disk_id,
+            )
+            disk = disks_service.disk_service(disk_id).get()
         api_disks.append(types.Disk(id=disk_id))
         metadata.append({
             "id": disk_id,
@@ -1059,7 +1068,9 @@ def backup_vm(connection, base, vm_name, cp, dry_run):
     vm = find_vm(vms, vm_name)
     vm_service = vms.vm_service(vm.id)
 
-    api_disks, disk_meta = select_disks(system, vm_service, cp)
+    api_disks, disk_meta = select_disks(
+        connection, system, vm_service, cp
+    )
     LOG.info("Start native FULL backup for: %s", vm_name)
     for disk in disk_meta:
         storage_ids = disk.get("storage_domain_ids") or []
