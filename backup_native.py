@@ -153,11 +153,18 @@ def find_vm(vms_service, name):
     return exact[0]
 
 
-def collect_nics(vm_service):
+def collect_nics(system, vm_service):
+    profiles = {
+        profile.id: profile
+        for profile in system.vnic_profiles_service().list()
+    }
+
     result = []
     for nic in vm_service.nics_service().list():
         mac = getattr(getattr(nic, "mac", None), "address", None)
-        profile = getattr(nic, "vnic_profile", None)
+        profile_ref = getattr(nic, "vnic_profile", None)
+        profile_id = getattr(profile_ref, "id", None) if profile_ref else None
+        profile = profiles.get(profile_id) if profile_id else None
         result.append({
             "id": getattr(nic, "id", None),
             "name": getattr(nic, "name", None),
@@ -166,8 +173,9 @@ def collect_nics(vm_service):
             if getattr(nic, "interface", None) is not None else None,
             "plugged": getattr(nic, "plugged", None),
             "linked": getattr(nic, "linked", None),
-            "vnic_profile_id": getattr(profile, "id", None) if profile else None,
-            "vnic_profile_name": getattr(profile, "name", None) if profile else None,
+            "vnic_profile_id": profile_id,
+            "vnic_profile_name": getattr(profile, "name", None)
+            if profile is not None else getattr(profile_ref, "name", None),
         })
     return result
 
@@ -284,6 +292,7 @@ def _extract_ovf(source):
 def save_ovf(vms_service, vm_service, vm_id, backup, target):
     snapshot_id = getattr(getattr(backup, "snapshot", None), "id", None)
     ovf = None
+    ovf_source = None
 
     if snapshot_id:
         try:
@@ -294,6 +303,7 @@ def save_ovf(vms_service, vm_service, vm_id, backup, target):
             )
             ovf = _extract_ovf(source)
             if ovf:
+                ovf_source = "backup_snapshot_native_ovirt"
                 LOG.info("Using OVF from backup snapshot %s", snapshot_id)
             else:
                 LOG.warning(
@@ -318,10 +328,12 @@ def save_ovf(vms_service, vm_service, vm_id, backup, target):
         exact = [item for item in matches if item.id == vm_id]
         if exact:
             ovf = _extract_ovf(exact[0])
+            if ovf:
+                ovf_source = "current_vm_native_ovirt"
 
     if not ovf:
         LOG.warning("Engine returned no native oVirt OVF data")
-        return snapshot_id, False
+        return snapshot_id, False, None
 
     data = ovf if isinstance(ovf, bytes) else str(ovf).encode("utf-8")
     with open(target, "wb") as fh:
@@ -329,8 +341,13 @@ def save_ovf(vms_service, vm_service, vm_id, backup, target):
         fh.flush()
         os.fsync(fh.fileno())
 
-    LOG.info("Saved VM OVF: %s (%d bytes)", target, len(data))
-    return snapshot_id, True
+    LOG.info(
+        "Saved VM OVF: %s (%d bytes), source=%s",
+        target,
+        len(data),
+        ovf_source,
+    )
+    return snapshot_id, True, ovf_source
 
 
 class LogProgress:
@@ -660,7 +677,7 @@ def backup_vm(connection, base, vm_name, cp, dry_run):
         "vm_id": vm.id,
         "created_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
         "selected_disks": disk_meta,
-        "nics": collect_nics(vm_service),
+        "nics": collect_nics(system, vm_service),
         "files": [],
     }
     write_manifest(work / "manifest.json", manifest)
@@ -703,11 +720,12 @@ def backup_vm(connection, base, vm_name, cp, dry_run):
             backup, "to_checkpoint_id", None
         )
 
-        snapshot_id, ovf_saved = save_ovf(
+        snapshot_id, ovf_saved, ovf_source = save_ovf(
             vms, vm_service, vm.id, backup, work / "vm.ovf"
         )
         manifest["snapshot_id"] = snapshot_id
         manifest["ovf_saved"] = ovf_saved
+        manifest["ovf_source"] = ovf_source
         write_manifest(work / "manifest.json", manifest)
 
         backup_disks = backup_service.disks_service().list()
