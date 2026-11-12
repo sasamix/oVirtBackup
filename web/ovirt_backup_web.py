@@ -27,6 +27,7 @@ MAX_VMS = 400
 SENSITIVE_KEYS = {"password", "token", "secret", "web_token"}
 DEFAULT_CONFIG_BACKUP_DIR = "/var/lib/ovirt-backup/config-backups"
 DEFAULT_OPERATION_LOCK = "/var/lib/ovirt-backup/operation.lock"
+CONSOLE_VERSION = "0.3.0"
 
 # Ordered schema used by both validation and the browser settings form.
 # Values are stored in the existing INI syntax expected by backup_native.py.
@@ -638,6 +639,43 @@ def read_config(path):
     if not cp.has_section("config"):
         raise RuntimeError("Missing [config] section in %s" % path)
     return cp
+
+
+def console_build_info():
+    repo_root = Path(__file__).resolve().parent.parent
+    commit = None
+    branch = None
+
+    if (repo_root / ".git").exists():
+        try:
+            commit = subprocess.run(
+                ["git", "-C", str(repo_root), "rev-parse", "--short=8", "HEAD"],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                timeout=2,
+            ).stdout.strip() or None
+        except Exception:
+            commit = None
+
+        try:
+            branch = subprocess.run(
+                ["git", "-C", str(repo_root), "rev-parse", "--abbrev-ref", "HEAD"],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                timeout=2,
+            ).stdout.strip() or None
+        except Exception:
+            branch = None
+
+    return {
+        "version": CONSOLE_VERSION,
+        "commit": commit,
+        "branch": branch,
+    }
 
 
 def safe_settings(cp):
@@ -1851,7 +1889,7 @@ class Application:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "oVirtBackupConsole/0.2"
+    server_version = "oVirtBackupConsole/0.3"
 
     @property
     def app(self):
@@ -1946,6 +1984,7 @@ class Handler(BaseHTTPRequestHandler):
                     "repository": repository_stats(cp),
                     "last_backup": backups[0] if backups else None,
                     "backup_count": len(backups),
+                    "console": console_build_info(),
                     "service": systemd_state("ovirt-backup.service"),
                     "timer": systemd_state("ovirt-backup.timer"),
                     "lock": operation_lock_state(self.app.operation_lock),
