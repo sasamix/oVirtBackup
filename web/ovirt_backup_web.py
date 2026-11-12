@@ -1586,6 +1586,33 @@ class Application:
         )
 
     def scheduler_apply(self, config):
+        requested_enabled = bool((config or {}).get("enabled"))
+        if requested_enabled:
+            cp = self.config()
+            if cp.getboolean("config", "dry_run", fallback=False):
+                raise SchedulerControllerError(
+                    "native timer cannot be enabled while backup configuration has dry_run=True"
+                )
+            checks = self._append_config_storage_checks(
+                config_checks(cp)
+            )
+            failed = [
+                item for item in checks["checks"]
+                if not item.get("ok")
+            ]
+            if failed:
+                raise SchedulerControllerError(
+                    "native timer cannot be enabled because backup configuration "
+                    "validation failed: %s"
+                    % "; ".join(
+                        "%s: %s" % (
+                            item.get("name"),
+                            item.get("detail"),
+                        )
+                        for item in failed
+                    )
+                )
+
         return scheduler_rpc(
             self.scheduler_socket,
             "apply",
