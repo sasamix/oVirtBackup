@@ -19,6 +19,7 @@ TOKEN="/etc/ovirt-backup/web.token"
 STATE_DIR="/var/lib/ovirt-backup"
 CONFIG_BACKUPS="$STATE_DIR/config-backups"
 OPERATIONS="$STATE_DIR/web-operations"
+RESTORES="$STATE_DIR/restores"
 LOG_DIR="/var/log/ovirt-backup"
 SERVICE="/etc/systemd/system/ovirt-backup-web.service"
 APACHE="/etc/httpd/conf.d/ovirt-backup.conf"
@@ -59,7 +60,7 @@ runuser -u ovirt-backup -- /usr/bin/python3     "$REPO_DIR/web/ovirt_backup_web.
 
 install -d -m 0750 -o root -g ovirt-backup /etc/ovirt-backup
 install -d -m 0750 -o ovirt-backup -g ovirt-backup "$CONFIG_DIR"
-install -d -m 0750 -o ovirt-backup -g ovirt-backup     "$STATE_DIR" "$CONFIG_BACKUPS" "$OPERATIONS" "$LOG_DIR"
+install -d -m 0750 -o ovirt-backup -g ovirt-backup     "$STATE_DIR" "$CONFIG_BACKUPS" "$OPERATIONS" "$RESTORES" "$LOG_DIR"
 
 if [ ! -f "$CONFIG" ]; then
     echo
@@ -214,6 +215,7 @@ echo "Console service: ovirt-backup-web.service"
 echo "Config:          $CONFIG"
 echo "Config history:  $CONFIG_BACKUPS"
 echo "Operations:      $OPERATIONS"
+echo "Restore states:  $RESTORES"
 echo "Token file:      $TOKEN"
 echo
 echo "Legacy cron:     UNCHANGED"
