@@ -106,6 +106,7 @@ fi
 %dir %attr(0750,ovirt-backup,ovirt-backup) %{_sysconfdir}/ovirt-backup/config
 %config(noreplace) %attr(0640,ovirt-backup,ovirt-backup) %{_sysconfdir}/ovirt-backup/config/backup.cfg
 %ghost %attr(0640,root,ovirt-backup) %{_sysconfdir}/ovirt-backup/web.token
+%ghost %attr(0640,root,ovirt-backup) %{_sysconfdir}/ovirt-backup/scheduler.json
 %config(noreplace) %{_sysconfdir}/httpd/conf.d/ovirt-backup.conf
 %config(noreplace) %{_sysconfdir}/logrotate.d/ovirt-backup
 %{_unitdir}/ovirt-backup.service
