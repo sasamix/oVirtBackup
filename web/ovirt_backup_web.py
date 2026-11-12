@@ -361,6 +361,8 @@ def current_settings(cp):
     secret_set = {}
     for key, spec in SETTINGS_SCHEMA.items():
         raw = cp.get("config", key, fallback=None)
+        if raw is None and key == "native_logger_file_path":
+            raw = cp.get("config", "logger_file_path", fallback=None)
         if spec["type"] == "secret":
             secret_set[key] = bool(raw)
             values[key] = ""
@@ -473,65 +475,24 @@ def config_schema_payload():
     return result
 
 
-def unmanaged_settings(cp):
-    return {
-        key: value
-        for key, value in cp.items("config")
-        if key not in SETTINGS_SCHEMA
-        and not any(word in key for word in SENSITIVE_KEYS)
-    }
-
-
-def editable_unmanaged_keys(cp, unknown):
-    return [
-        key for key, value in unknown.items()
-        if key not in cp.defaults()
-        and re.fullmatch(r"[A-Za-z0-9_.-]+", key)
-        and len(value.splitlines()) <= 1
-    ]
-
-
-def validate_unmanaged_settings(cp, updates):
-    if not isinstance(updates, dict):
-        raise ValueError("unmanaged settings must be an object")
-    unknown = unmanaged_settings(cp)
-    editable = set(editable_unmanaged_keys(cp, unknown))
-    changed = {}
-    errors = {}
-    for key, value in updates.items():
-        if key not in editable:
-            errors[key] = "setting cannot be edited here"
-        elif not isinstance(value, str) or re.search(r"[\x00\r\n\v\f\x1c-\x1e\x85\u2028\u2029]", value):
-            errors[key] = "value must be a single line of text"
-        elif value.strip() != unknown[key]:
-            changed[key] = value.strip()
-    if errors:
-        raise SettingsValidationError(errors)
-    return changed
-
-
 def settings_payload(cp, config_path):
     values, secret_set = current_settings(cp)
-    unknown = unmanaged_settings(cp)
     return {
         "config_path": str(config_path),
         "schema": config_schema_payload(),
         "values": values,
         "secret_set": secret_set,
-        "unknown": unknown,
-        "editable_unknown": editable_unmanaged_keys(cp, unknown),
     }
 
 
-def render_config_update(original, merged, unmanaged=None):
-    unmanaged = unmanaged or {}
+def render_config_update(original, merged):
     lines = original.splitlines(keepends=True)
     output = []
     in_config = False
     found_config = False
     seen = set()
 
-    key_pattern = re.compile(r"^(\s*)([A-Za-z0-9_.-]+)(\s*[:=][ \t]*)(.*?)(\r?\n)?$")
+    key_pattern = re.compile(r"^(\s*)([A-Za-z0-9_.-]+)(\s*=\s*)(.*?)(\r?\n)?$")
     section_pattern = re.compile(r"^\s*\[([^\]]+)\]\s*(?:[#;].*)?(?:\r?\n)?$")
 
     def append_missing():
@@ -559,11 +520,7 @@ def render_config_update(original, merged, unmanaged=None):
             match = key_pattern.match(line)
             if match:
                 key = match.group(2).lower()
-                if key in SETTINGS_SCHEMA or key in unmanaged:
-                    value = (
-                        serialize_setting(key, merged[key])
-                        if key in SETTINGS_SCHEMA else unmanaged[key]
-                    )
+                if key in SETTINGS_SCHEMA:
                     newline = match.group(5) or "\n"
                     output.append(
                         "%s%s%s%s%s"
@@ -571,7 +528,7 @@ def render_config_update(original, merged, unmanaged=None):
                             match.group(1),
                             match.group(2),
                             match.group(3),
-                            value,
+                            serialize_setting(key, merged[key]),
                             newline,
                         )
                     )
@@ -592,7 +549,7 @@ def render_config_update(original, merged, unmanaged=None):
     return "".join(output)
 
 
-def atomic_save_settings(config_path, merged, backup_dir, unmanaged=None):
+def atomic_save_settings(config_path, merged, backup_dir):
     path = Path(config_path)
     parent = path.parent
     if not parent.is_dir():
@@ -601,15 +558,12 @@ def atomic_save_settings(config_path, merged, backup_dir, unmanaged=None):
         raise RuntimeError("Config directory is not writable: %s" % parent)
 
     original = path.read_text(encoding="utf-8") if path.exists() else "[config]\n"
-    rendered = render_config_update(original, merged, unmanaged)
+    rendered = render_config_update(original, merged)
 
     # Parse the exact generated text before touching the live configuration.
     probe = configparser.RawConfigParser()
     probe.read_string(rendered)
     merge_settings(probe, {})
-    for key, value in (unmanaged or {}).items():
-        if probe.get("config", key, fallback=None) != value:
-            raise SettingsValidationError({key: "value could not be saved"})
 
     backup_root = Path(backup_dir)
     backup_root.mkdir(parents=True, exist_ok=True)
@@ -1002,15 +956,13 @@ def engine_summary(cp, engine):
         }
 
 
-def config_from_merged(cp, merged, unmanaged=None):
+def config_from_merged(cp, merged):
     result = configparser.RawConfigParser()
     result.add_section("config")
     for key, value in cp.items("config"):
         result.set("config", key, value)
     for key, value in merged.items():
         result.set("config", key, serialize_setting(key, value))
-    for key, value in (unmanaged or {}).items():
-        result.set("config", key, value)
     return result
 
 
@@ -1353,6 +1305,8 @@ def config_checks(cp, engine, *, temporary=False):
 def manifest_summary(path):
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("backup manifest must be an object")
     except Exception as exc:
         return {
             "path": str(path.parent),
@@ -1457,19 +1411,124 @@ def retention_preview(cp):
     return result
 
 
-def scan_backups(cp, vm_name=None, limit=250):
+BACKUP_DIRECTORY = r"\d{8}_\d{6}(?:\.partial|\.failed-\d{6})?"
+DELETE_PENDING_SUFFIX = ".failed-delete"
+
+
+def backup_deletable(path):
+    name = path.name.removesuffix(DELETE_PENDING_SUFFIX)
+    return bool(re.fullmatch(BACKUP_DIRECTORY, name)) and not (
+        path.is_symlink() or path.parent.is_symlink()
+    )
+
+
+def ensure_no_nested_mounts(path):
+    # mountinfo also reports bind mounts, including mounts on the same device.
+    for entry in Path("/proc/self/mountinfo").read_text(
+        encoding="utf-8", errors="surrogateescape"
+    ).splitlines():
+        mount = Path(re.sub(
+            r"\\([0-7]{3})", lambda match: chr(int(match[1], 8)), entry.split()[4]
+        ))
+        if mount == path or path in mount.parents:
+            raise ValueError("backup directory contains a mount point")
+
+
+def delete_repository_backup(cp, value):
+    root = get_backup_path(cp)
+    if root is None or not isinstance(value, str) or not value or "\0" in value:
+        raise ValueError("backup directory is required")
+    root = root.absolute()
+    target = Path(value).absolute()
+    try:
+        relative = target.relative_to(root)
+    except ValueError:
+        raise ValueError("backup directory is outside configured repository") from None
+    if (
+        len(relative.parts) != 2
+        or ".." in relative.parts
+        or not backup_deletable(target)
+    ):
+        raise ValueError("invalid backup directory")
+    if cp.getboolean("config", "backup_path_must_be_mount", fallback=True):
+        if not root.resolve().is_mount():
+            raise ValueError("backup repository is not mounted")
+    expected = root.resolve() / relative
+    if target.resolve() != expected or not expected.is_dir():
+        raise ValueError("backup directory is missing or invalid")
+    ensure_no_nested_mounts(expected)
+
+    pending = expected
+    if not expected.name.endswith(DELETE_PENDING_SUFFIX):
+        manifest = expected / "manifest.json"
+        if manifest.is_symlink() or not manifest.is_file():
+            raise ValueError("backup manifest is missing or invalid")
+        data = read_json_file(manifest)
+        if not isinstance(data, dict) or data.get("type") != "full":
+            raise ValueError("only native full backups can be deleted here")
+        pending = expected.with_name(expected.name + DELETE_PENDING_SUFFIX)
+        if pending.exists() or pending.is_symlink():
+            raise ValueError("a previous deletion is pending for this backup")
+        try:
+            expected.rename(pending)
+        except PermissionError as exc:
+            raise ValueError(
+                "the web service user cannot remove this backup from the repository"
+            ) from exc
+
+    try:
+        shutil.rmtree(pending)
+    except OSError as exc:
+        raise RuntimeError(
+            "backup deletion incomplete; retry from the repository list: %s" % pending
+        ) from exc
+    LOG.info("Deleted repository backup: %s", expected)
+    return {"ok": True}
+
+
+def scan_backups(cp, vm_name=None, limit=250, *, include_pending=False):
     root = get_backup_path(cp)
     if root is None or not root.is_dir():
         return []
 
-    if vm_name:
-        vm_path = root / vm_name
-        manifests = list(vm_path.glob("*/manifest.json")) if vm_path.is_dir() else []
-    else:
-        manifests = list(root.glob("*/*/manifest.json"))
+    if vm_name and (Path(vm_name).name != vm_name or vm_name in (".", "..")):
+        return []
+    scope = root / vm_name if vm_name else root
+    pattern = "*" if vm_name else "*/*"
+    entries = [
+        (manifest.parent, False)
+        for manifest in scope.glob(pattern + "/manifest.json")
+        if not manifest.parent.name.endswith(DELETE_PENDING_SUFFIX)
+        and not manifest.is_symlink()
+        and not manifest.parent.is_symlink()
+        and not manifest.parent.parent.is_symlink()
+    ]
+    if include_pending:
+        entries.extend(
+            (path, True) for path in scope.glob(pattern + DELETE_PENDING_SUFFIX)
+            if path.is_dir() and backup_deletable(path)
+        )
 
-    manifests.sort(key=lambda p: p.parent.name, reverse=True)
-    return [manifest_summary(p) for p in manifests[:limit]]
+    entries.sort(key=lambda entry: entry[0].name, reverse=True)
+    result = []
+    for path, pending in entries[:limit]:
+        if pending:
+            item = {
+                "path": str(path),
+                "directory": path.name.removesuffix(DELETE_PENDING_SUFFIX),
+                "vm_name": path.parent.name,
+                "status": "delete_pending",
+            }
+        else:
+            manifest = path / "manifest.json"
+            item = manifest_summary(manifest)
+            item.setdefault("directory", path.name)
+            item.setdefault("vm_name", path.parent.name)
+        item["can_delete"] = backup_deletable(path) and (
+            pending or item.get("type") == "full"
+        )
+        result.append(item)
+    return result
 
 
 def tail_file(path, lines):
@@ -1560,6 +1619,8 @@ def resolve_backup_directory(cp, value):
     target = Path(str(value or "")).resolve()
     if root != target and root not in target.parents:
         raise ValueError("backup directory is outside configured repository")
+    if target.name.endswith(DELETE_PENDING_SUFFIX):
+        raise ValueError("backup deletion is pending")
     if not target.is_dir():
         raise ValueError("backup directory does not exist: %s" % target)
     manifest = target / "manifest.json"
@@ -1858,13 +1919,10 @@ class Application:
         result["ok"] = all(item["ok"] for item in result["checks"])
         return result
 
-    def validate_settings(self, updates, unmanaged=None):
+    def validate_settings(self, updates):
         cp = self.config()
         merged = merge_settings(cp, updates)
-        unmanaged = validate_unmanaged_settings(
-            cp, unmanaged if unmanaged is not None else {}
-        )
-        draft = config_from_merged(cp, merged, unmanaged)
+        draft = config_from_merged(cp, merged)
         temporary = engine_connection_options(draft) != engine_connection_options(cp)
         result = self._append_config_storage_checks(
             config_checks(draft, self.engine, temporary=temporary)
@@ -1881,18 +1939,14 @@ class Application:
         draft = config_from_merged(cp, merged)
         return retention_preview(draft)
 
-    def save_settings(self, updates, unmanaged=None):
+    def save_settings(self, updates):
         with self.config_lock:
             cp = self.config()
             merged = merge_settings(cp, updates)
-            unmanaged = validate_unmanaged_settings(
-                cp, unmanaged if unmanaged is not None else {}
-            )
             backup = atomic_save_settings(
                 self.config_path,
                 merged,
                 self.config_backup_dir,
-                unmanaged,
             )
             saved = self.config()
 
@@ -1945,6 +1999,19 @@ class Application:
             "lock": operation_lock_state(self.operation_lock),
             "legacy_backup_processes": legacy_backup_processes(),
         }
+
+    def delete_backup(self, path):
+        with self.operation_start_lock:
+            if self.current_operation(include_log=False).get("active"):
+                raise BusyOperationError("console operation is already active")
+            self._ensure_no_legacy_backup()
+            self.operation_lock.parent.mkdir(parents=True, exist_ok=True)
+            with self.operation_lock.open("a+", encoding="utf-8") as handle:
+                try:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError as exc:
+                    raise BusyOperationError("native operation is already active") from exc
+                return delete_repository_backup(self.config(), path)
 
     def _start_operation(self, kind, command, metadata):
         with self.operation_start_lock:
@@ -2315,7 +2382,9 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/backups":
                 vm_name = query.get("vm", [None])[0]
                 limit = int(query.get("limit", ["250"])[0])
-                self.send_json({"backups": scan_backups(cp, vm_name, limit)})
+                self.send_json({
+                    "backups": scan_backups(cp, vm_name, limit, include_pending=True)
+                })
             elif path == "/api/logs":
                 lines = int(query.get("lines", ["400"])[0])
                 kind = query.get("kind", ["backup"])[0]
@@ -2386,14 +2455,14 @@ class Handler(BaseHTTPRequestHandler):
 
             if path == "/api/settings/validate":
                 result = self.app.validate_settings(
-                    body.get("settings", {}), body.get("unmanaged")
+                    body.get("settings", {})
                 )
                 self.send_json(result)
                 return
 
             if path == "/api/settings":
                 result = self.app.save_settings(
-                    body.get("settings", {}), body.get("unmanaged")
+                    body.get("settings", {})
                 )
                 self.send_json(result)
                 return
@@ -2415,6 +2484,13 @@ class Handler(BaseHTTPRequestHandler):
                     body.get("scheduler", {})
                 )
                 self.send_json(result)
+                return
+
+            if path == "/api/backups/delete":
+                if not self.app.token() or not self.app.authorized(self.headers):
+                    self.send_json({"error": "unauthorized"}, HTTPStatus.UNAUTHORIZED)
+                    return
+                self.send_json(self.app.delete_backup(body.get("backup_dir")))
                 return
 
             if path == "/api/actions/dry-run":
@@ -2505,6 +2581,7 @@ def self_test():
             "verify_tls=False\n"
             "imageio_timeout_policy=cancel\n"
             "dry_run=True\n"
+            "logger_file_path=/var/log/legacy-native.log\n"
             "custom_flag: original\n"
             "custom_token=hidden\n"
             "custom_multiline=first\n"
@@ -2529,31 +2606,15 @@ def self_test():
             "integer setting validated",
         )
 
-        check(
-            "unmanaged field visibility",
-            settings_payload(cp, config_path)["editable_unknown"] == ["custom_flag"]
-            and "custom_token" not in unmanaged_settings(cp),
-        )
-        for key, value in (
-            ("custom_token", "new"),
-            ("custom_multiline", "new"),
-            ("absent", "new"),
-            ("custom_flag", "first\nsecond"),
-        ):
-            try:
-                validate_unmanaged_settings(cp, {key: value})
-            except SettingsValidationError:
-                continue
-            raise AssertionError("unexpected unmanaged update: " + key)
-        unmanaged = validate_unmanaged_settings(cp, {"custom_flag": "updated"})
-        backup = atomic_save_settings(config_path, merged, backup_dir, unmanaged)
+        backup = atomic_save_settings(config_path, merged, backup_dir)
         saved = read_config(config_path)
         check(
-            "unmanaged settings update",
-            saved.get("config", "custom_flag") == "updated"
+            "unmanaged config preserved",
+            "unknown" not in settings_payload(saved, config_path)
+            and saved.get("config", "native_logger_file_path") == "/var/log/legacy-native.log"
+            and saved.get("config", "custom_flag") == "original"
             and saved.get("config", "custom_token") == "hidden"
-            and "custom_flag: updated" in config_path.read_text(encoding="utf-8")
-            and read_config(backup).get("config", "custom_flag") == "original",
+            and saved.get("config", "custom_multiline") == "first\nsecond",
         )
         check(
             "atomic config save",

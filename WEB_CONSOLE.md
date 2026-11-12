@@ -49,6 +49,7 @@ Read operations:
 - GET /api/overview
 - GET /api/health
 - GET /api/vms
+- POST /api/backups/delete
 - GET /api/backups
 - GET /api/logs?kind=backup|restore
 - GET /api/settings
@@ -114,10 +115,15 @@ VMs, tags, and disk IDs from Engine. Saved values stay visible when they are
 missing from the inventory. ImageIO can use the default Engine route, and
 the restore storage domain can be selected at restore time.
 
-Existing single-line settings outside the native form can be edited in the
-unmanaged settings section. These values use the same atomic save and
-configuration history. Sensitive settings stay hidden. Inherited and
-multiline values are read-only.
+The settings form shows the supported native configuration fields. Other
+entries in the configuration file are preserved when settings are saved.
+The legacy backup log path is shown as the effective native path when a
+native log path is absent.
+
+The Backups page can delete an individual native backup after confirmation.
+Deletion takes the native operation lock and refuses to proceed during a
+manual or legacy operation. A partially deleted copy is excluded from
+restore and can be retried from the Backups page.
 
 ## Retention preview
 
