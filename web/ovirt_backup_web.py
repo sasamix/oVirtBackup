@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from datetime import datetime, timezone
@@ -1586,6 +1587,105 @@ class Handler(BaseHTTPRequestHandler):
             )
 
 
+def self_test():
+    result = {"ok": False, "checks": []}
+
+    def check(name, condition, detail=""):
+        if not condition:
+            raise AssertionError("%s: %s" % (name, detail))
+        result["checks"].append({"name": name, "ok": True, "detail": detail})
+
+    with tempfile.TemporaryDirectory(prefix="ovirt-backup-web-selftest-") as tmp:
+        root = Path(tmp)
+        config_dir = root / "config"
+        config_dir.mkdir()
+        config_path = config_dir / "backup.cfg"
+        backup_dir = root / "config-backups"
+        repo = root / "repository"
+        repo.mkdir()
+
+        config_path.write_text(
+            "[config]\n"
+            "vm_names=[\"demo\"]\n"
+            "vm_names_skip=[]\n"
+            "vm_tag=\n"
+            "all_vms=False\n"
+            "server=https://engine.example/ovirt-engine/api\n"
+            "username=admin@internal\n"
+            "password=s3cr%t-value\n"
+            "backup_path=%s\n"
+            "backup_path_must_be_mount=False\n"
+            "verify_tls=False\n"
+            "imageio_timeout_policy=cancel\n"
+            "dry_run=True\n"
+            % repo,
+            encoding="utf-8",
+        )
+
+        cp = read_config(config_path)
+        merged = merge_settings(cp, {
+            "password": "",
+            "imageio_max_workers": 8,
+        })
+        check(
+            "secret preservation",
+            merged["password"] == "s3cr%t-value",
+            "blank browser secret preserved stored password",
+        )
+        check(
+            "numeric coercion",
+            merged["imageio_max_workers"] == 8,
+            "integer setting validated",
+        )
+
+        backup = atomic_save_settings(config_path, merged, backup_dir)
+        saved = read_config(config_path)
+        check(
+            "atomic config save",
+            saved.get("config", "password") == "s3cr%t-value"
+            and saved.getint("config", "imageio_max_workers") == 8,
+            "rendered config reparsed successfully",
+        )
+        check(
+            "config history",
+            bool(backup) and Path(backup).is_file(),
+            str(backup),
+        )
+
+        vm_dir = repo / "demo"
+        vm_dir.mkdir()
+        for stamp in ("20261110_010000", "20261111_010000"):
+            item = vm_dir / stamp
+            item.mkdir()
+            (item / "manifest.json").write_text(
+                '{"status":"complete","type":"full"}\n',
+                encoding="utf-8",
+            )
+
+        cp = read_config(config_path)
+        merged = merge_settings(cp, {
+            "backup_keep_count": "",
+            "backup_keep_count_by_number": 1,
+        })
+        preview = retention_preview(config_from_merged(cp, merged))
+        check(
+            "retention preview",
+            preview["delete_count"] == 1 and preview["keep_count"] == 1,
+            "count policy previews without deleting",
+        )
+        check(
+            "retention is read-only",
+            all((vm_dir / stamp).is_dir() for stamp in (
+                "20261110_010000", "20261111_010000"
+            )),
+            "preview left repository untouched",
+        )
+
+    result["ok"] = True
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -1609,12 +1709,20 @@ def main():
     parser.add_argument("--listen", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--debug", action="store_true")
+    parser.add_argument(
+        "--self-test",
+        action="store_true",
+        help="Run local configuration/retention self-test and exit.",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
         level=logging.DEBUG if args.debug else logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s",
     )
+
+    if args.self_test:
+        return self_test()
 
     app = Application(
         args.config,
