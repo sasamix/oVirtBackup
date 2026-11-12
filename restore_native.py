@@ -115,11 +115,32 @@ def load_config(path):
     return cp
 
 
-def configure_logging(debug):
-    logging.basicConfig(
-        format="%(asctime)s: %(message)s",
-        level=logging.DEBUG if debug else logging.INFO,
+def configure_logging(cp, debug):
+    fmt = cp.get("config", "logger_fmt", fallback="%(asctime)s: %(message)s")
+    filename = cp.get(
+        "config",
+        "native_restore_logger_file_path",
+        fallback="/var/log/ovirt-backup/restore-native.log",
     )
+    level = logging.DEBUG if debug else logging.INFO
+
+    root = logging.getLogger()
+    root.setLevel(level)
+    for handler in list(root.handlers):
+        root.removeHandler(handler)
+
+    formatter = logging.Formatter(fmt)
+
+    console = logging.StreamHandler()
+    console.setLevel(level)
+    console.setFormatter(formatter)
+    root.addHandler(console)
+
+    if filename:
+        file_handler = logging.FileHandler(filename)
+        file_handler.setLevel(level)
+        file_handler.setFormatter(formatter)
+        root.addHandler(file_handler)
 
 
 def connect(cp):
@@ -1148,8 +1169,9 @@ def main():
     parser.add_argument("-d", "--debug", action="store_true")
     args = parser.parse_args()
 
-    configure_logging(args.debug)
     cp = load_config(args.config_file)
+    configure_logging(cp, args.debug)
+    restore_started = time.monotonic()
 
     backup_dir, manifest, ovf_path, disks = load_backup(args.backup_dir)
     source_name = manifest.get("vm_name") or "restored-vm"
@@ -1432,8 +1454,18 @@ def main():
             )
             state_disk["transfer_id"] = transfer_id
             state_disk["upload_seconds"] = round(elapsed, 3)
+            virtual_size = info.get("virtual-size") or 0
+            state_disk["upload_virtual_mib_per_second"] = round(
+                virtual_size / elapsed / 1024**2, 1
+            ) if elapsed > 0 else None
             state_disk["status"] = "uploaded"
             write_state(state_path, state)
+            LOG.info(
+                "Upload complete for disk %s: %.1fs, %.1f virtual MiB/s",
+                disk.id,
+                elapsed,
+                state_disk["upload_virtual_mib_per_second"] or 0.0,
+            )
 
             disk_map[item["source_id"]] = {
                 "target_disk_id": disk.id,
@@ -1654,17 +1686,21 @@ def main():
         state["completed_utc"] = dt.datetime.now(
             dt.timezone.utc
         ).isoformat()
+        state["duration_seconds"] = round(
+            time.monotonic() - restore_started, 3
+        )
         state["vm_status"] = str(final_vm.status)
         write_state(state_path, state)
 
         LOG.info(
             "Restore complete: VM %s (%s) status=%s, NICs=%d, "
-            "network_mode=%s. VM was NOT started.",
+            "network_mode=%s, duration=%.1fs. VM was NOT started.",
             target_name,
             final_vm.id,
             final_vm.status,
             len(final_nics),
             args.network_mode,
+            state["duration_seconds"],
         )
         LOG.info("Restore state saved: %s", state_path)
         return 0
