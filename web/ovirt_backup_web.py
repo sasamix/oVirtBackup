@@ -1109,6 +1109,75 @@ def manifest_summary(path):
     }
 
 
+def retention_preview(cp):
+    root = get_backup_path(cp)
+    result = {
+        "root": str(root) if root else None,
+        "delete": [],
+        "keep": [],
+    }
+    if root is None or not root.is_dir():
+        return result
+
+    days_raw = cp.get("config", "backup_keep_count", fallback="").strip()
+    count_raw = cp.get(
+        "config", "backup_keep_count_by_number", fallback=""
+    ).strip()
+    days = int(days_raw) if days_raw else None
+    keep_count = int(count_raw) if count_raw else None
+    now = datetime.now()
+
+    for vm_dir in sorted(p for p in root.iterdir() if p.is_dir()):
+        completed = sorted(
+            p for p in vm_dir.iterdir()
+            if p.is_dir()
+            and not p.name.endswith(".partial")
+            and ".failed-" not in p.name
+            and (p / "manifest.json").is_file()
+        )
+        survivors = list(completed)
+        reasons = {}
+
+        if days is not None:
+            cutoff = now.timestamp() - days * 86400
+            for path in list(survivors):
+                try:
+                    stamp = datetime.strptime(
+                        path.name, "%Y%m%d_%H%M%S"
+                    ).timestamp()
+                except ValueError:
+                    continue
+                if stamp < cutoff:
+                    reasons.setdefault(path, []).append(
+                        "age>%d days" % days
+                    )
+                    survivors.remove(path)
+
+        if keep_count is not None:
+            survivors.sort(key=lambda p: p.name)
+            while len(survivors) > keep_count:
+                path = survivors.pop(0)
+                reasons.setdefault(path, []).append(
+                    "count>%d" % keep_count
+                )
+
+        for path in completed:
+            item = {
+                "vm_name": vm_dir.name,
+                "directory": path.name,
+                "path": str(path),
+            }
+            if path in reasons:
+                item["reasons"] = reasons[path]
+                result["delete"].append(item)
+            else:
+                result["keep"].append(item)
+
+    result["delete_count"] = len(result["delete"])
+    result["keep_count"] = len(result["keep"])
+    return result
+
+
 def scan_backups(cp, vm_name=None, limit=250):
     root = get_backup_path(cp)
     if root is None or not root.is_dir():
@@ -1223,6 +1292,12 @@ class Application:
             for key, value in merged.items()
         }
         return result
+
+    def preview_retention(self, updates):
+        cp = self.config()
+        merged = merge_settings(cp, updates)
+        draft = config_from_merged(cp, merged)
+        return retention_preview(draft)
 
     def save_settings(self, updates):
         with self.config_lock:
@@ -1466,6 +1541,11 @@ class Handler(BaseHTTPRequestHandler):
 
             if path == "/api/settings":
                 result = self.app.save_settings(body.get("settings", {}))
+                self.send_json(result)
+                return
+
+            if path == "/api/settings/retention-preview":
+                result = self.app.preview_retention(body.get("settings", {}))
                 self.send_json(result)
                 return
 
