@@ -1,8 +1,9 @@
 # oVirt Backup Console
 
-The native web console now has a validated configuration mode. Real backup,
-restore and scheduler write actions remain disabled until the configuration UI
-has been validated on the target installation.
+The native web console has validated configuration, inventory, retention
+preview, dry-run, manual backup and manual restore workflows. Scheduler
+configuration is the remaining migration step before switching from the legacy
+`pioner` cron to the native timer.
 
 ## Architecture
 
@@ -47,8 +48,9 @@ Validated write operations currently enabled:
 - POST /api/actions/restore-preflight
 - POST /api/actions/restore
 
-Manual native backup and restore actions are enabled. Scheduler mutation
-remains intentionally disabled.
+Manual native backup and restore actions are enabled. Scheduler mutation is
+implemented separately from backup configuration so it can remain disabled
+while the legacy cron is still present.
 
 When /etc/ovirt-backup/web.token exists and is non-empty, every API request
 requires the HTTP header `Authorization: Bearer TOKEN`. The browser UI stores
@@ -127,7 +129,8 @@ authoritative.
 A manual backup is refused while `dry_run=True` in the saved configuration.
 Restore offers a separate preflight action and requires an explicit confirmation
 before execute. Restore still creates a new VM, never starts it automatically,
-and uses the existing `none` / `isolated` / `original` network rules.
+and uses the existing `none` / `isolated` /
+`isolated-original-mac` / `original` network rules.
 
 The web systemd unit uses `KillMode=process` so restarting only the web console
 does not terminate a runner that already launched a native operation. Operation
@@ -146,6 +149,7 @@ state remains available after the console comes back.
 /var/lib/ovirt-backup/
 /var/lib/ovirt-backup/config-backups/
 /var/lib/ovirt-backup/web-operations/
+/var/lib/ovirt-backup/restores/
 /var/log/ovirt-backup/
 /usr/lib/systemd/system/ovirt-backup.service
 /usr/lib/systemd/system/ovirt-backup.timer
