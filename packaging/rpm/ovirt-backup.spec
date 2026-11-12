@@ -1,8 +1,8 @@
 Name:           ovirt-backup-console
-Version:        %{?version_override}%{!?version_override:0.4.0}
+Version:        %{?version_override}%{!?version_override:0.5.0}
 Release:        0.1%{?dist}
 Summary:        Native oVirt VM backup tool and local web console
-License:        GPL-3.0-or-later
+License:        MIT
 URL:            https://github.com/sasamix/oVirtBackup
 Source0:        %{name}-%{version}.tar.gz
 
@@ -74,7 +74,6 @@ exit 0
 %post
 %systemd_post ovirt-backup-web.service
 %systemd_post ovirt-backup-scheduler-control.service
-%systemd_post ovirt-backup.timer
 if [ ! -s %{_sysconfdir}/ovirt-backup/web.token ]; then
     umask 027
     python3 -c 'import secrets; print(secrets.token_urlsafe(32))' \
@@ -120,6 +119,10 @@ fi
 %dir %attr(0750,ovirt-backup,ovirt-backup) %{_localstatedir}/log/ovirt-backup
 
 %changelog
+* Fri Nov 13 2026 oVirtBackup contributors - 0.5.0-0.1
+- Prepare the native console for new installations and preserve existing schedules.
+- Reuse Engine sessions, add repository deletion and a filterable audit log.
+
 * Fri Nov 13 2026 sasamix <asm@pioner.kz> - 0.4.0-0.1
 - Add safe scheduler configuration through a root-isolated Unix socket controller.
 - Add scheduler UI, migration guard, systemd timer drop-in management and status.

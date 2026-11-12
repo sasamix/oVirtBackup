@@ -44,7 +44,7 @@ DEFAULT_CONFIG = {
     "enabled": False,
     "time": "02:00",
     "weekdays": list(DAY_ORDER),
-    "timezone": "Asia/Almaty",
+    "timezone": "UTC",
     "randomized_delay_seconds": 0,
 }
 
@@ -572,14 +572,14 @@ def self_test():
         "enabled": False,
         "time": "03:15",
         "weekdays": ["mon", "wed", "fri"],
-        "timezone": "Asia/Almaty",
+        "timezone": "UTC",
         "randomized_delay_seconds": 30,
     })
     check("normalize", cfg["time"] == "03:15")
     check(
         "calendar",
         calendar_expression(cfg)
-        == "Mon,Wed,Fri *-*-* 03:15:00 Asia/Almaty",
+        == "Mon,Wed,Fri *-*-* 03:15:00 UTC",
     )
     dropin = render_dropin(cfg)
     check("reset OnCalendar", "OnCalendar=\n" in dropin)

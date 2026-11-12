@@ -82,6 +82,7 @@ button.action:hover{border-color:var(--accent)}
 button.primary{background:var(--accent);border-color:var(--accent);color:#08111f;font-weight:650}
 button.danger{border-color:var(--bad);color:var(--bad)}
 button:disabled{opacity:.45;cursor:not-allowed}
+#logFilter{width:auto}
 pre{white-space:pre-wrap;word-break:break-word;margin:0;background:#0a0d12;border:1px solid var(--line);border-radius:10px;padding:14px;max-height:65vh;overflow:auto;font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace}
 .page{display:none}.page.active{display:block}
 .kv{display:grid;grid-template-columns:260px 1fr;border-bottom:1px solid var(--line);padding:8px 0}
@@ -173,7 +174,7 @@ input[type=checkbox]{width:auto;transform:scale(1.1)}
     </div>
   </div>
   <table>
-    <thead><tr><th></th><th>Name</th><th>Status</th><th>vCPU</th><th>Memory</th><th>Disks / storage</th><th scope="col" class="vm-backup-flag">Backup</th><th scope="col" class="vm-actions"></th></tr></thead>
+    <thead><tr><th scope="col" data-tip="tip.select" title="Select VMs for manual actions" aria-label="Select VMs for manual actions"></th><th scope="col" data-tip="tip.name" title="VM name and Engine ID">Name</th><th scope="col" data-tip="tip.status" title="Current VM power state in Engine">Status</th><th scope="col" data-tip="tip.vcpu" title="Number of virtual CPUs">vCPU</th><th scope="col" data-tip="tip.memory" title="Configured VM memory">Memory</th><th scope="col" data-tip="tip.disks" title="Attached disks and their oVirt storage domains">Disks / storage</th><th scope="col" class="vm-backup-flag" data-tip="tip.backup" title="Check mark means the VM is included in the saved backup settings">Backup</th><th scope="col" class="vm-actions" data-tip="tip.vm_action" title="Create a backup for this VM after selecting its row" aria-label="Create a backup for this VM after selecting its row"></th></tr></thead>
     <tbody id="vmsBody"></tbody>
   </table>
 </section>
@@ -184,7 +185,7 @@ input[type=checkbox]{width:auto;transform:scale(1.1)}
     <div id="backupNotice" aria-live="polite"></div>
   </div>
   <table class="backup-table">
-    <thead><tr><th scope="col">Backup</th><th scope="col">Status</th><th scope="col">Type</th><th scope="col">Disks</th><th scope="col">Size</th><th scope="col"></th></tr></thead>
+    <thead><tr><th scope="col" data-tip="tip.copy" title="Source VM, backup directory and checkpoint">Backup</th><th scope="col" data-tip="tip.copy_status" title="Status recorded in the backup manifest">Status</th><th scope="col" data-tip="tip.format" title="Backup type and disk image format">Type</th><th scope="col" data-tip="tip.count" title="Number of disks in the backup">Disks</th><th scope="col" data-tip="tip.size" title="Actual space occupied by the disk images">Size</th><th scope="col" data-tip="tip.copy_actions" title="Restore or delete this backup" aria-label="Restore or delete this backup"></th></tr></thead>
     <tbody id="backupsBody"></tbody>
   </table>
 </section>
@@ -192,11 +193,15 @@ input[type=checkbox]{width:auto;transform:scale(1.1)}
 <section id="logs" class="page">
   <div class="page-bar">
     <div class="section-title">
-      <h2 id="logsTitle">Native backup log</h2>
+      <h2 data-i18n="log.title">Logs</h2>
       <div class="toolbar">
-        <button class="action" onclick="loadLogs('backup')" data-i18n="log.backup_tab">Backup</button>
-        <button class="action" onclick="loadLogs('restore')" data-i18n="action.restore">Restore</button>
-        <button class="action" onclick="loadLogs(currentLogKind)" data-i18n="action.reload">Reload</button>
+        <select id="logFilter" aria-label="Log filter" onchange="loadLogs(this.value)">
+          <option value="all" data-i18n="log.all">All events</option>
+          <option value="backup" data-i18n="log.backup_tab">Backup</option>
+          <option value="restore" data-i18n="action.restore">Restore</option>
+          <option value="config" data-i18n="log.config">Configuration</option>
+        </select>
+        <button class="action" onclick="loadLogs()" data-i18n="action.reload">Reload</button>
       </div>
     </div>
   </div>
@@ -249,7 +254,7 @@ input[type=checkbox]{width:auto;transform:scale(1.1)}
       </div>
       <div class="field">
         <div class="field-label" data-i18n="scheduler.timezone">Timezone</div>
-        <input id="schedulerTimezone" type="text" value="Asia/Almaty">
+        <input id="schedulerTimezone" type="text" value="UTC">
       </div>
       <div class="field">
         <div class="field-label" data-i18n="scheduler.random_delay">Random delay (seconds)</div>
@@ -343,7 +348,7 @@ let token=sessionStorage.getItem("ovirtBackupToken")||"";
 let settingsData=null;
 let settingsOptions=null;
 let settingsLoadId=0;
-let currentLogKind="backup";
+let currentLogKind="all";
 let currentVms=[];
 let restoreBackupPath="";
 let restoreSourceVm="";
@@ -423,7 +428,25 @@ const I18N={
     "action.backup_vm":"Создать копию",
     "vms.in_config":"Включена",
     "vms.not_in_config":"Не включена",
+    "tip.select":"Выбрать ВМ для ручных действий",
+    "tip.name":"Имя ВМ и её идентификатор в Engine",
+    "tip.status":"Текущее состояние ВМ в Engine",
+    "tip.vcpu":"Количество виртуальных процессоров",
+    "tip.memory":"Объём памяти, заданный для ВМ",
+    "tip.disks":"Подключённые диски и их домены хранения oVirt",
+    "tip.backup":"Галочка означает, что ВМ входит в сохранённые настройки бэкапа",
+    "tip.vm_action":"Создать копию этой ВМ после выбора строки",
+    "tip.copy":"Исходная ВМ, каталог копии и Checkpoint",
+    "tip.copy_status":"Состояние копии по её манифесту",
+    "tip.format":"Тип копии и формат образов дисков",
+    "tip.count":"Количество дисков в копии",
+    "tip.size":"Фактическое место, занятое образами дисков",
+    "tip.copy_actions":"Восстановить или удалить эту копию",
+    "log.title":"Журнал",
+    "log.all":"Все события",
     "log.backup_tab":"Бэкап",
+    "log.config":"Конфигурация",
+    "log.audit_error":"Настройки сохранены, но записать изменения в журнал не удалось.",
     "log.no_entries":"Нет записей в журнале",
     "backup.delete_audit_error":"Копия удалена, но запись в историю удаления сохранить не удалось.",
     "action.delete_backup":"Удалить",
@@ -541,6 +564,10 @@ function settingUnit(unit){
   return ({seconds:"секунд",days:"дней"}[unit]||unit);
 }
 applyI18n();
+for(const cell of document.querySelectorAll("[data-tip]")){
+  cell.title=staticText(cell.dataset.tip,cell.title);
+  if(cell.hasAttribute("aria-label"))cell.setAttribute("aria-label",cell.title);
+}
 if(uiLang==="ru"){
   const tableMaps=[
     ["#recentBody","thead th",["VM","Создано","Статус","Диски","Фактически","Backup ID"]],
@@ -798,12 +825,15 @@ async function useSelectedForConfig(){
 
 async function loadLogs(kind=currentLogKind){
   currentLogKind=kind;
-  const d=await api("api/logs?kind="+encodeURIComponent(kind)+"&lines=600");
-  if(kind!==currentLogKind)return;
-  document.getElementById("logsTitle").textContent=kind==="restore"?staticText("log.restore","Native restore log"):staticText("log.backup","Native backup log");
   const box=document.getElementById("logBox");
-  box.textContent=d.lines.join("\n")||staticText("log.no_entries","No log entries");
-  box.scrollTop=box.scrollHeight;
+  try{
+    const d=await api("api/logs?kind="+encodeURIComponent(kind)+"&lines=600");
+    if(kind!==currentLogKind)return;
+    box.textContent=d.lines.join("\n")||staticText("log.no_entries","No log entries");
+    box.scrollTop=box.scrollHeight;
+  }catch(e){
+    if(kind===currentLogKind)box.textContent=e.message;
+  }
 }
 async function loadHealth(){
   const d=await api("api/health");
@@ -924,14 +954,21 @@ async function openRestoreDialog(path,sourceVm){
     const opts=await api("api/restore-options");
     const cluster=document.getElementById("restoreCluster");
     cluster.innerHTML=(opts.clusters||[]).map(x=>'<option value="'+esc(x.name)+'">'+esc(x.name)+'</option>').join("");
-    if(opts.defaults?.cluster)cluster.value=opts.defaults.cluster;
+    if(opts.clusters?.some(item=>item.name===opts.defaults?.cluster))cluster.value=opts.defaults.cluster;
     const storage=document.getElementById("restoreStorage");
-    storage.innerHTML='<option value="">'+esc(staticText("restore.storage_required","Choose target storage."))+'</option>'+
-      (opts.storage_domains||[]).map(x=>
-      '<option value="'+esc(x.name)+'">'+esc(x.name)+(x.address?' · '+esc(x.address):'')+'</option>'
-    ).join("");
-    const savedStorage=opts.defaults?.storage_domain;
-    storage.value=[...storage.options].some(option=>option.value===savedStorage)?savedStorage:"";
+    const updateStorage=()=>{
+      const selected=opts.clusters?.find(item=>item.name===cluster.value);
+      const eligible=new Set(selected?.storage_domain_ids||[]);
+      const domains=(opts.storage_domains||[]).filter(item=>eligible.has(item.id)&&item.name);
+      storage.replaceChildren(
+        new Option(staticText("restore.storage_required","Choose target storage"),""),
+        ...domains.map(item=>new Option(item.name+(item.address?" · "+item.address:""),item.name))
+      );
+      const saved=opts.defaults?.storage_domain;
+      storage.value=domains.some(item=>item.name===saved)?saved:(domains.length===1?domains[0].name:"");
+    };
+    cluster.onchange=updateStorage;
+    updateStorage();
     document.getElementById("restoreNetworkMode").value=opts.defaults?.network_mode||"isolated";
     document.getElementById("restoreDialog").showModal();
   }catch(e){
@@ -998,7 +1035,7 @@ function renderScheduler(data,fillForm=true){
   if(fillForm){
     document.getElementById("schedulerEnabled").checked=!!cfg.enabled;
     document.getElementById("schedulerTime").value=cfg.time||"02:00";
-    document.getElementById("schedulerTimezone").value=cfg.timezone||"Asia/Almaty";
+    document.getElementById("schedulerTimezone").value=cfg.timezone||"UTC";
     document.getElementById("schedulerRandomDelay").value=cfg.randomized_delay_seconds??0;
     const days=new Set(cfg.weekdays||[]);
     document.querySelectorAll("[data-scheduler-day]").forEach(x=>x.checked=days.has(x.dataset.schedulerDay));
@@ -1058,7 +1095,8 @@ async function saveScheduler(){
   try{
     const d=await post("api/scheduler",{scheduler:cfg});
     renderScheduler(d,true);
-    schedulerNotice(staticText("scheduler.saved","Scheduler settings saved."),"good");
+    if(d.audit_written===false)schedulerNotice(staticText("log.audit_error","Settings saved, but the audit entry could not be written."),"warn");
+    else schedulerNotice(staticText("scheduler.saved","Scheduler settings saved."),"good");
     await loadOverview();
   }catch(e){
     schedulerNotice(uiLang==="ru"?t("scheduler.save_error",{error:e.message}):("Cannot save scheduler: "+e.message),"bad");
@@ -1166,7 +1204,8 @@ async function saveSettings(){
     const d=await post("api/settings",{settings:draft});
     renderSettings(d.settings);
     renderChecks(d.checks);
-    setNotice(staticText("settings.saved","Configuration saved atomically.")+(d.backup?(uiLang==="ru"?t("settings.previous",{path:d.backup}):(" Previous version: "+d.backup)):""),"good");
+    if(d.audit_written===false)setNotice(staticText("log.audit_error","Settings saved, but the audit entry could not be written."),"warn");
+    else setNotice(staticText("settings.saved","Configuration saved atomically.")+(d.backup?(uiLang==="ru"?t("settings.previous",{path:d.backup}):(" Previous version: "+d.backup)):""),"good");
     await loadOverview();
   }catch(e){
     renderValidationError(e);

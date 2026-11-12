@@ -1,0 +1,49 @@
+name: Native release checks
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+      - name: Install test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcurl4-openssl-dev libssl-dev libxml2-dev
+          python -m pip install -r requirements.txt -r tests/requirements.txt
+      - name: Test
+        run: |
+          python -m pyflakes ./*.py web/*.py tests/*.py
+          python -m pytest tests
+          python web/ovirt_backup_web.py --self-test
+          python web/ovirt_backup_scheduler.py self-test
+          bash -n packaging/build-rpm.sh
+          bash -n packaging/install-live-console.sh
+
+  rpm:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build EL9 RPM
+        run: |
+          docker run --rm -v "$PWD:/src" almalinux:9 bash -euc '
+            dnf -y install git rpm-build systemd-rpm-macros tar gzip findutils
+            git config --global --add safe.directory /src
+            cd /src
+            TOPDIR=/src/rpmbuild bash packaging/build-rpm.sh
+          '
+      - uses: actions/upload-artifact@v4
+        with:
+          name: el9-rpm
+          path: |
+            rpmbuild/RPMS/**/*.rpm
+            rpmbuild/SRPMS/*.rpm

@@ -113,7 +113,9 @@ The Validate action checks:
 The settings form loads ImageIO networks, restore clusters and storage domains,
 VMs, tags, and disk IDs from Engine. Saved values stay visible when they are
 missing from the inventory. ImageIO can use the default Engine route, and
-the restore storage domain can be selected at restore time.
+the restore storage domain can be selected at restore time. The console
+selects it automatically when the target cluster has exactly one active Data
+domain.
 
 The settings form shows the supported native configuration fields. Other
 entries in the configuration file are preserved when settings are saved.
@@ -123,8 +125,10 @@ native log path is absent.
 The Backups page can delete an individual native backup after confirmation.
 Deletion takes the native operation lock and refuses to proceed during a
 manual or legacy operation. A partially deleted copy is excluded from
-restore and can be retried from the Backups page. Successful deletions appear
-alongside native backup messages in chronological order. The VM inventory shows whether each VM is in
+restore and can be retried from the Backups page. The Logs page shows all events by default, with Backup, Restore and
+Configuration filters. Backup deletions appear alongside backup messages.
+Configuration saves record changed setting names and timestamps. Values,
+including credentials, are omitted. The VM inventory shows whether each VM is in
 the saved backup selection.
 
 ## Retention preview
@@ -279,7 +283,7 @@ Supported settings are:
 - enabled/disabled;
 - start time in 24-hour `HH:MM`;
 - one or more weekdays;
-- IANA timezone, default `Asia/Almaty`;
+- IANA timezone, default `UTC`;
 - optional randomized delay from 0 to 3600 seconds.
 
 The generated timer is persistent. `systemd-analyze calendar` validates the

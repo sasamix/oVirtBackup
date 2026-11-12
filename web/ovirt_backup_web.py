@@ -15,7 +15,6 @@ import sys
 import tempfile
 import threading
 import time
-from collections import deque
 from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -32,7 +31,7 @@ SENSITIVE_KEYS = {"password", "passwd", "token", "secret", "credential", "privat
 DEFAULT_CONFIG_BACKUP_DIR = "/var/lib/ovirt-backup/config-backups"
 DEFAULT_OPERATION_LOCK = "/var/lib/ovirt-backup/operation.lock"
 DEFAULT_SCHEDULER_SOCKET = "/run/ovirt-backup/scheduler.sock"
-CONSOLE_VERSION = "0.4.0"
+CONSOLE_VERSION = "0.5.0"
 
 # Ordered schema used by both validation and the browser settings form.
 # Values are stored in the existing INI syntax expected by backup_native.py.
@@ -1266,7 +1265,7 @@ def config_checks(cp, engine, *, temporary=False):
                 add(
                     "Restore storage domain",
                     True,
-                    "not configured; restore must choose one explicitly",
+                    "optional for restore; scheduled backups use the backup repository",
                 )
 
             cluster_name = cp.get(
@@ -1575,27 +1574,25 @@ def log_timestamp(line):
     return stamp, line[match.end():]
 
 
-def merge_backup_log(native_lines, deletion_lines, lines):
-    deletions = []
-    undated = []
-    for line in deletion_lines:
-        stamp, message = log_timestamp(line)
-        if stamp is None:
-            undated.append(line)
-        else:
-            local_time = stamp.strftime("%Y-%m-%d %H:%M:%S,%f")[:-3]
-            deletions.append((stamp, local_time + message))
-
-    pending = deque(sorted(deletions, key=lambda item: item[0]))
-    merged = []
-    for line in native_lines:
-        stamp, _message = log_timestamp(line)
-        if stamp is not None:
-            while pending and pending[0][0] <= stamp:
-                merged.append(pending.popleft()[1])
-        merged.append(line)
-    merged.extend(line for _stamp, line in pending)
-    merged.extend(undated)
+def merge_log_streams(streams, lines):
+    entries = []
+    for stream in streams:
+        stamp = None
+        entry = []
+        for line in stream:
+            next_stamp, message = log_timestamp(line)
+            if next_stamp is not None:
+                if entry:
+                    entries.append((stamp, entry))
+                stamp = next_stamp
+                local_time = stamp.strftime("%Y-%m-%d %H:%M:%S,%f")[:-3]
+                entry = [local_time + message]
+            else:
+                entry.append(line)
+        if entry:
+            entries.append((stamp, entry))
+    entries.sort(key=lambda item: (item[0] is not None, item[0]))
+    merged = [line for _stamp, entry in entries for line in entry]
     return merged[-max(1, min(lines, 2000)):]
 
 
@@ -1692,19 +1689,30 @@ def resolve_backup_directory(cp, value):
     return target, data
 
 
-def restore_target_catalog(system, engine):
+def restore_target_catalog(system, engine, *, include_eligible_storage=False):
     storages = sorted(
         storage_domain_catalog(system).values(),
         key=lambda item: (item.get("name") or "").lower(),
     )
     engine.ensure_running()
-    clusters = sorted(
-        [
-            {"id": cluster.id, "name": getattr(cluster, "name", None)}
-            for cluster in system.clusters_service().list()
-        ],
-        key=lambda item: (item.get("name") or "").lower(),
-    )
+    clusters = []
+    by_data_center = {}
+    data_ids = {storage["id"] for storage in storages if storage["type"] == "data"}
+    for cluster in system.clusters_service().list():
+        item = {"id": cluster.id, "name": getattr(cluster, "name", None)}
+        if include_eligible_storage:
+            data_center = getattr(getattr(cluster, "data_center", None), "id", None)
+            if data_center and data_center not in by_data_center:
+                engine.ensure_running()
+                service = system.data_centers_service().data_center_service(data_center)
+                by_data_center[data_center] = [
+                    domain.id for domain in service.storage_domains_service().list()
+                    if domain.id in data_ids
+                    and str(getattr(domain, "status", None)) == "active"
+                ]
+            item["storage_domain_ids"] = by_data_center.get(data_center, [])
+        clusters.append(item)
+    clusters.sort(key=lambda item: (item["name"] or "").lower())
     return {"storage_domains": storages, "clusters": clusters}
 
 
@@ -1737,7 +1745,9 @@ def settings_options(cp, engine):
 
 def restore_options(cp, engine):
     def query(connection):
-        targets = restore_target_catalog(connection.system_service(), engine)
+        targets = restore_target_catalog(
+            connection.system_service(), engine, include_eligible_storage=True
+        )
         return {
             **targets,
             "network_modes": [
@@ -1858,6 +1868,7 @@ class Application:
         self.started = time.time()
         self.engine = EngineSession()
         self.config_lock = threading.Lock()
+        self.scheduler_lock = threading.Lock()
         self.operation_start_lock = threading.Lock()
 
     def scheduler_status(self):
@@ -1898,12 +1909,20 @@ class Application:
                     )
                 )
 
-        return scheduler_rpc(
-            self.scheduler_socket,
-            "apply",
-            config=config,
-            timeout=15,
-        )
+        with self.scheduler_lock:
+            previous = self.scheduler_status()["config"]
+            result = scheduler_rpc(
+                self.scheduler_socket,
+                "apply",
+                config=config,
+                timeout=15,
+            )
+            changed = [
+                key for key, value in result["config"].items()
+                if previous.get(key) != value
+            ]
+            result["audit_written"] = self.audit_config_change("scheduler", changed)
+            return result
 
     def scheduler_capability(self):
         try:
@@ -1942,7 +1961,7 @@ class Application:
     def authorized(self, headers):
         expected = self.token()
         if not expected:
-            return True
+            return False
         auth = headers.get("Authorization", "")
         if not auth.startswith("Bearer "):
             return False
@@ -1997,19 +2016,41 @@ class Application:
         draft = config_from_merged(cp, merged)
         return retention_preview(draft)
 
+    def audit_config_change(self, kind, keys):
+        if not keys:
+            return True
+        stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        try:
+            self.operation_dir.mkdir(parents=True, exist_ok=True)
+            with (self.operation_dir / "configuration.log").open(
+                "a", encoding="utf-8"
+            ) as audit:
+                audit.write("%s  CONFIG  %s  %s\n" % (
+                    stamp, kind, ", ".join(sorted(keys))
+                ))
+        except OSError:
+            LOG.exception("Configuration changed but the audit log could not be written")
+            return False
+        return True
+
     def save_settings(self, updates):
         with self.config_lock:
             cp = self.config()
             merged = merge_settings(cp, updates)
+            previous, _secret_set = current_settings(cp)
+            previous["password"] = cp.get("config", "password", fallback="")
+            changed = [key for key in merged if merged[key] != previous[key]]
             backup = atomic_save_settings(
                 self.config_path,
                 merged,
                 self.config_backup_dir,
             )
             saved = self.config()
+            audit_written = self.audit_config_change("backup settings", changed)
 
         return {
             "ok": True,
+            "audit_written": audit_written,
             "backup": backup,
             "settings": settings_payload(saved, self.config_path),
             "checks": self._append_config_storage_checks(
@@ -2449,29 +2490,31 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/logs":
                 lines = int(query.get("lines", ["400"])[0])
                 kind = query.get("kind", ["backup"])[0]
-                if kind == "restore":
-                    logfile = cp.get(
-                        "config",
-                        "native_restore_logger_file_path",
-                        fallback="/var/log/ovirt-backup/restore-native.log",
-                    )
+                backup_log = cp.get(
+                    "config", "native_logger_file_path",
+                    fallback=cp.get("config", "logger_file_path", fallback=""),
+                )
+                restore_log = cp.get(
+                    "config", "native_restore_logger_file_path",
+                    fallback="/var/log/ovirt-backup/restore-native.log",
+                )
+                operations = self.app.operation_dir
+                paths = {
+                    "backup": [backup_log, operations / "backup-deletions.log"],
+                    "restore": [restore_log],
+                    "config": [operations / "configuration.log"],
+                }
+                if kind == "all":
+                    sources = paths["backup"] + paths["restore"] + paths["config"]
+                elif kind in paths:
+                    sources = paths[kind]
                 else:
-                    kind = "backup"
-                    logfile = cp.get(
-                        "config",
-                        "native_logger_file_path",
-                        fallback=cp.get("config", "logger_file_path", fallback=""),
-                    )
-                log_lines = tail_file(logfile, lines)
-                if kind == "backup":
-                    deletions = tail_file(
-                        self.app.operation_dir / "backup-deletions.log", lines
-                    )
-                    log_lines = merge_backup_log(log_lines, deletions, lines)
+                    raise ValueError("unknown log filter")
+                streams = [tail_file(path, lines) for path in sources]
                 self.send_json({
                     "kind": kind,
-                    "path": logfile,
-                    "lines": log_lines,
+                    "path": str(sources[0]) if kind != "all" else None,
+                    "lines": merge_log_streams(streams, lines),
                 })
             elif path == "/api/settings":
                 self.send_json(settings_payload(cp, self.app.config_path))
@@ -2779,6 +2822,16 @@ def self_test():
             "preview left repository untouched",
         )
 
+    log = merge_log_streams([
+        ["2026-01-01T01:00:00+00:00  backup", "traceback continuation"],
+        ["2026-01-01T02:30:00+01:00  CONFIG  scheduler  time"],
+        ["2026-01-01T02:00:00+00:00  DELETE  copy"],
+    ], 4)
+    check(
+        "combined log chronology",
+        log[1] == "traceback continuation"
+        and "CONFIG" in log[2] and "DELETE" in log[3],
+    )
     result["ok"] = True
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0

@@ -12,7 +12,13 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-SOURCE_CONFIG="${SOURCE_CONFIG:-$REPO_DIR/config.native.cfg}"
+if [[ -z "${SOURCE_CONFIG:-}" ]]; then
+    if [[ -f "$REPO_DIR/config.native.cfg" ]]; then
+        SOURCE_CONFIG="$REPO_DIR/config.native.cfg"
+    else
+        SOURCE_CONFIG="$REPO_DIR/config_native_example.cfg"
+    fi
+fi
 CONFIG_DIR="/etc/ovirt-backup/config"
 CONFIG="$CONFIG_DIR/backup.cfg"
 TOKEN="/etc/ovirt-backup/web.token"
@@ -34,7 +40,7 @@ echo "Source config: $SOURCE_CONFIG"
 echo "Canonical config: $CONFIG"
 echo
 
-for file in     "$REPO_DIR/backup_native.py"     "$REPO_DIR/restore_native.py"     "$REPO_DIR/web/ovirt_backup_web.py"     "$REPO_DIR/web/ovirt_backup_runner.py"     "$REPO_DIR/web/ovirt_backup_scheduler.py"     "$REPO_DIR/web/ovirt_backup_scheduler.py"     "$REPO_DIR/web/static/index.html"     "$REPO_DIR/packaging/systemd/ovirt-backup.timer"
+for file in     "$REPO_DIR/backup_native.py"     "$REPO_DIR/restore_native.py"     "$REPO_DIR/web/ovirt_backup_web.py"     "$REPO_DIR/web/ovirt_backup_runner.py"     "$REPO_DIR/web/ovirt_backup_scheduler.py"     "$REPO_DIR/web/static/index.html"     "$REPO_DIR/packaging/systemd/ovirt-backup.timer"
 do
     if [ ! -f "$file" ]; then
         echo "ERROR: missing $file"
@@ -68,7 +74,7 @@ install -d -m 0750 -o ovirt-backup -g ovirt-backup     "$STATE_DIR" "$CONFIG_BAC
 
 if [ ! -f "$CONFIG" ]; then
     echo
-    echo "=== Installing canonical config from tested native config ==="
+    echo "=== Installing canonical native configuration ==="
     install -m 0640 -o ovirt-backup -g ovirt-backup         "$SOURCE_CONFIG" "$CONFIG"
 else
     echo
