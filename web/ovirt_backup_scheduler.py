@@ -377,6 +377,7 @@ def status():
         "calendar_detail": calendar_detail,
         "calendar_error": calendar_error,
         "timer": timer,
+        "in_sync": bool(config["enabled"]) == bool(timer["enabled"]),
         "legacy_cron_entries": cron,
         "legacy_processes": processes,
         "migration_guard": {
