@@ -67,6 +67,7 @@ input[type=checkbox]{width:auto;transform:scale(1.1)}
 <header>
   <div class="brand"><span>oVirt</span> <span data-i18n="brand.console">Backup Console</span></div>
   <div class="row">
+    <span id="consoleVersion" class="pill muted">v…</span>
     <span id="engineBadge" class="pill muted">Engine …</span>
     <button class="action" onclick="refreshAll()" data-i18n="action.refresh">Refresh</button>
   </div>
@@ -444,6 +445,13 @@ function renderChecks(result,target="settingsChecks"){
 
 async function loadOverview(){
   const d=await api("api/overview");
+  const consoleInfo=d.console||{};
+  const versionParts=[];
+  if(consoleInfo.version)versionParts.push("v"+consoleInfo.version);
+  if(consoleInfo.commit)versionParts.push(consoleInfo.commit);
+  document.getElementById("consoleVersion").textContent=versionParts.join(" · ")||"v?";
+  document.getElementById("consoleVersion").title=consoleInfo.branch||"";
+
   document.getElementById("engineState").textContent=d.engine.ok?staticText("state.connected","Connected"):staticText("state.error","Error");
   document.getElementById("engineState").className="big "+(d.engine.ok?"good":"bad");
   document.getElementById("engineBadge").textContent=d.engine.ok?(uiLang==="ru"?"Engine подключён":"Engine connected"):(uiLang==="ru"?"Ошибка Engine":"Engine error");
