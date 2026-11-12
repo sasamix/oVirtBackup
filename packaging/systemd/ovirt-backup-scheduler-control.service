@@ -6,7 +6,7 @@ Before=ovirt-backup-web.service
 [Service]
 Type=simple
 User=root
-Group=root
+Group=ovirt-backup
 ExecStart=/usr/bin/python3 /usr/libexec/ovirt-backup/ovirt_backup_scheduler.py serve
 Restart=on-failure
 RestartSec=2
