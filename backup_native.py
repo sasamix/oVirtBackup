@@ -206,6 +206,126 @@ def imageio_network_route(connection, transfer, cp):
     return routed_url, tls_hostname, target_ip
 
 
+def imageio_host_for_storage_domain(connection, storage_domain_id, cp):
+    """
+    Pick the oVirt host that directly serves a host-local NFS storage domain.
+
+    The match is automatic: storage.address must equal exactly one host IPv4
+    address on imageio_network. External NFS (for example Synology) or any
+    ambiguous/non-NFS layout is left to Engine rather than guessed.
+    """
+    if not storage_domain_id:
+        return None
+
+    system = connection.system_service()
+    try:
+        storage_domain = (
+            system.storage_domains_service()
+            .storage_domain_service(storage_domain_id)
+            .get()
+        )
+    except Exception:
+        LOG.exception(
+            "Cannot inspect storage domain %s; Engine will select ImageTransfer host",
+            storage_domain_id,
+        )
+        return None
+
+    storage_address = getattr(
+        getattr(storage_domain, "storage", None), "address", None
+    )
+    if not storage_address:
+        LOG.info(
+            "Storage domain %s (%s) has no storage.address; "
+            "Engine will select ImageTransfer host",
+            getattr(storage_domain, "name", storage_domain_id),
+            storage_domain_id,
+        )
+        return None
+
+    network_name = cp.get(
+        "config", "imageio_network", fallback=""
+    ).strip()
+    if not network_name:
+        return None
+
+    networks = system.networks_service().list(
+        search="name=%s" % network_name
+    )
+    exact_networks = [
+        network for network in networks
+        if getattr(network, "name", None) == network_name
+    ]
+    if len(exact_networks) != 1:
+        LOG.warning(
+            "Cannot uniquely resolve imageio_network %r; "
+            "Engine will select ImageTransfer host",
+            network_name,
+        )
+        return None
+
+    network_id = exact_networks[0].id
+    candidates = []
+
+    for host in system.hosts_service().list():
+        if getattr(host, "status", None) != types.HostStatus.UP:
+            continue
+
+        host_service = system.hosts_service().host_service(host.id)
+        try:
+            attachments = host_service.network_attachments_service().list()
+        except Exception:
+            LOG.exception(
+                "Cannot inspect network attachments for host %s",
+                getattr(host, "name", host.id),
+            )
+            continue
+
+        addresses = set()
+        for attachment in attachments:
+            attached_network_id = getattr(
+                getattr(attachment, "network", None), "id", None
+            )
+            if attached_network_id != network_id:
+                continue
+
+            for assignment in (
+                getattr(attachment, "ip_address_assignments", None) or []
+            ):
+                address = getattr(
+                    getattr(assignment, "ip", None), "address", None
+                )
+                if address:
+                    addresses.add(address)
+
+        if storage_address in addresses:
+            candidates.append(host)
+
+    if len(candidates) != 1:
+        LOG.info(
+            "Storage domain %s (%s) address=%s maps to %d UP hosts on %s; "
+            "Engine will select ImageTransfer host",
+            getattr(storage_domain, "name", storage_domain_id),
+            storage_domain_id,
+            storage_address,
+            len(candidates),
+            network_name,
+        )
+        return None
+
+    host = candidates[0]
+    LOG.info(
+        "Auto-selected ImageTransfer host %s (%s) for storage domain %s "
+        "(%s, address=%s)",
+        host.name,
+        host.id,
+        getattr(storage_domain, "name", storage_domain_id),
+        storage_domain_id,
+        storage_address,
+    )
+    return types.Host(id=host.id)
+
+
 @contextmanager
 def temporary_dns_override(hostname, address):
     if not hostname or not address:
@@ -384,6 +504,11 @@ def select_disks(system, vm_service, cp):
             "actual_size": getattr(disk, "actual_size", None),
             "format": str(disk.format) if getattr(disk, "format", None) else None,
             "sparse": getattr(disk, "sparse", None),
+            "storage_domain_ids": [
+                ref.id
+                for ref in (getattr(disk, "storage_domains", None) or [])
+                if getattr(ref, "id", None)
+            ],
         })
 
     return api_disks, metadata
@@ -574,7 +699,8 @@ class LogProgress:
             self._last_log = now
 
 
-def create_transfer(connection, backup_id, disk_id, cp):
+def create_transfer(
+        connection, backup_id, disk_id, cp, storage_domain_id=None):
     system = connection.system_service()
     transfers = system.image_transfers_service()
     policy = cp.get(
@@ -582,29 +708,9 @@ def create_transfer(connection, backup_id, disk_id, cp):
     )
     timeout = cp.getint("config", "imageio_timeout", fallback=120)
 
-    # Backup download and restore upload may have different optimal hosts.
-    # Pinning the download host keeps the transfer on the storage host closest
-    # to the source disk, while imageio_upload_host is handled by restore.
-    host_name = cp.get(
-        "config", "imageio_download_host", fallback=""
-    ).strip()
-    transfer_host = None
-    if host_name:
-        matches = system.hosts_service().list(search="name=%s" % host_name)
-        exact = [host for host in matches if host.name == host_name]
-        if not exact:
-            raise RuntimeError("ImageIO download host %r not found" % host_name)
-        if len(exact) != 1:
-            raise RuntimeError(
-                "ImageIO download host name %r is not unique" % host_name
-            )
-        transfer_host = types.Host(id=exact[0].id)
-        LOG.info(
-            "Pinning download ImageTransfer for disk %s to host %s (%s)",
-            disk_id,
-            exact[0].name,
-            exact[0].id,
-        )
+    transfer_host = imageio_host_for_storage_domain(
+        connection, storage_domain_id, cp
+    )
 
     transfer = transfers.add(
         types.ImageTransfer(
@@ -733,13 +839,20 @@ def finalize_transfer(connection, transfer, disk_id, cp):
             )
 
 
-def download_disk(connection, backup, disk, disk_dir, cp):
+def download_disk(
+        connection, backup, disk, disk_dir, cp, storage_domain_id=None):
     disk_id = disk.id
     # FULL backups are stored as sparse RAW. This avoids qcow2 random-read
     # amplification over NFS during restore. Incremental backups require qcow2
     # and are intentionally outside the current FULL-only backup scheme.
     target = disk_dir / ("%s.raw" % disk_id)
-    transfer = create_transfer(connection, backup.id, disk_id, cp)
+    transfer = create_transfer(
+        connection,
+        backup.id,
+        disk_id,
+        cp,
+        storage_domain_id=storage_domain_id,
+    )
     download_started = time.monotonic()
 
     try:
@@ -972,9 +1085,31 @@ def backup_vm(connection, base, vm_name, cp, dry_run):
                 % (sorted(wanted), sorted(returned))
             )
 
+        disk_meta_by_id = {
+            item["id"]: item for item in disk_meta
+        }
+
         for disk in backup_disks:
+            source_meta = disk_meta_by_id.get(disk.id) or {}
+            storage_ids = source_meta.get("storage_domain_ids") or []
+            storage_domain_id = storage_ids[0] if len(storage_ids) == 1 else None
+            if len(storage_ids) != 1:
+                LOG.info(
+                    "Disk %s source storage domains=%r; "
+                    "Engine will select download ImageTransfer host",
+                    disk.id,
+                    storage_ids,
+                )
+
             manifest["files"].append(
-                download_disk(connection, backup, disk, disks_dir, cp)
+                download_disk(
+                    connection,
+                    backup,
+                    disk,
+                    disks_dir,
+                    cp,
+                    storage_domain_id=storage_domain_id,
+                )
             )
             write_manifest(work / "manifest.json", manifest)
 
