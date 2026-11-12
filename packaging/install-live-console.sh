@@ -128,7 +128,8 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
-systemctl enable --now ovirt-backup-web.service
+systemctl enable ovirt-backup-web.service
+systemctl restart ovirt-backup-web.service
 
 echo
 echo "=== Web service ==="
