@@ -1043,8 +1043,11 @@ def list_vms(cp, engine, details=True):
         system = connection.system_service()
         service = system.vms_service()
         catalog = storage_domain_catalog(system) if details else None
+        all_vms = service.list(max=MAX_VMS)
+        selected, _missing = resolve_selected_vms(system, cp, all_vms=all_vms)
+        selected = set(selected)
         items = []
-        for vm in service.list(max=MAX_VMS):
+        for vm in all_vms:
             engine.ensure_running()
             cores = None
             if vm.cpu and vm.cpu.topology:
@@ -1056,6 +1059,7 @@ def list_vms(cp, engine, details=True):
             item = {
                 "id": vm.id,
                 "name": vm.name,
+                "configured_for_backup": vm.name in selected,
                 "status": str(vm.status) if vm.status is not None else None,
                 "memory": vm.memory,
                 "cpu_cores": cores,
@@ -1077,9 +1081,10 @@ def list_vms(cp, engine, details=True):
     return engine.run(cp, query)
 
 
-def resolve_selected_vms(system, cp):
+def resolve_selected_vms(system, cp, *, all_vms=None):
     vms_service = system.vms_service()
-    all_vms = vms_service.list(max=MAX_VMS)
+    if all_vms is None:
+        all_vms = vms_service.list(max=MAX_VMS)
     by_name = {vm.name: vm for vm in all_vms}
 
     if cp.getboolean("config", "all_vms", fallback=False):
@@ -1434,7 +1439,7 @@ def ensure_no_nested_mounts(path):
             raise ValueError("backup directory contains a mount point")
 
 
-def delete_repository_backup(cp, value):
+def delete_repository_backup(cp, value, audit):
     root = get_backup_path(cp)
     if root is None or not isinstance(value, str) or not value or "\0" in value:
         raise ValueError("backup directory is required")
@@ -1483,7 +1488,16 @@ def delete_repository_backup(cp, value):
             "backup deletion incomplete; retry from the repository list: %s" % pending
         ) from exc
     LOG.info("Deleted repository backup: %s", expected)
-    return {"ok": True}
+    try:
+        entry = "%s  DELETE  %s\n" % (
+            datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            json.dumps(str(expected), ensure_ascii=False),
+        )
+        audit.write(entry.encode("utf-8", errors="backslashreplace"))
+    except OSError:
+        LOG.exception("Backup deleted but the console audit log could not be written")
+        return {"ok": True, "audit_written": False}
+    return {"ok": True, "audit_written": True}
 
 
 def scan_backups(cp, vm_name=None, limit=250, *, include_pending=False):
@@ -2011,7 +2025,10 @@ class Application:
                     fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                 except BlockingIOError as exc:
                     raise BusyOperationError("native operation is already active") from exc
-                return delete_repository_backup(self.config(), path)
+                self.operation_dir.mkdir(parents=True, exist_ok=True)
+                audit_path = self.operation_dir / "backup-deletions.log"
+                with audit_path.open("ab", buffering=0) as audit:
+                    return delete_repository_backup(self.config(), path, audit)
 
     def _start_operation(self, kind, command, metadata):
         with self.operation_start_lock:
@@ -2399,12 +2416,15 @@ class Handler(BaseHTTPRequestHandler):
                     logfile = cp.get(
                         "config",
                         "native_logger_file_path",
-                        fallback="/var/log/ovirt-backup/backup-native.log",
+                        fallback=cp.get("config", "logger_file_path", fallback=""),
                     )
                 self.send_json({
                     "kind": kind,
                     "path": logfile,
                     "lines": tail_file(logfile, lines),
+                    "deletions": tail_file(
+                        self.app.operation_dir / "backup-deletions.log", lines
+                    ) if kind == "backup" else [],
                 })
             elif path == "/api/settings":
                 self.send_json(settings_payload(cp, self.app.config_path))

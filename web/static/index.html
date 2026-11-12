@@ -142,7 +142,7 @@ input[type=checkbox]{width:auto;transform:scale(1.1)}
     </div>
   </div>
   <table>
-    <thead><tr><th></th><th>Name</th><th>Status</th><th>vCPU</th><th>Memory</th><th>Disks / storage</th><th></th></tr></thead>
+    <thead><tr><th></th><th>Name</th><th>Status</th><th>vCPU</th><th>Memory</th><th>Disks / storage</th><th>In backup settings</th><th></th></tr></thead>
     <tbody id="vmsBody"></tbody>
   </table>
 </section>
@@ -165,6 +165,10 @@ input[type=checkbox]{width:auto;transform:scale(1.1)}
         <button class="action" onclick="loadLogs(currentLogKind)" data-i18n="action.reload">Reload</button>
       </div>
     </div>
+  </div>
+  <div id="deletionLog" class="section" hidden>
+    <div class="section-title"><h2 data-i18n="log.deletions">Backup deletions</h2></div>
+    <pre id="deletionLogBox"></pre>
   </div>
   <pre id="logBox">Loading…</pre>
 </section>
@@ -387,6 +391,12 @@ const I18N={
     "field.secret_enter":"Введите пароль","field.advanced":"дополнительно",
     "dashboard.operation_log":"Журнал операции",
     "action.backup_vm":"Создать копию",
+    "vms.in_config":"Включена",
+    "vms.not_in_config":"Не включена",
+    "log.deletions":"Удаление резервных копий",
+    "log.no_entries":"Нет записей в журнале",
+    "log.not_configured":"Файл журнала не настроен",
+    "backup.delete_audit_error":"Копия удалена, но запись в историю удаления сохранить не удалось.",
     "action.delete_backup":"Удалить…",
     "backup.delete_confirm":"Удалить копию {vm} / {directory} без возможности восстановления?",
     "backup.delete_done":"Копия удалена.",
@@ -505,7 +515,7 @@ applyI18n();
 if(uiLang==="ru"){
   const tableMaps=[
     ["#recentBody","thead th",["VM","Создано","Статус","Диски","Фактически","Backup ID"]],
-    ["#vmsBody","thead th",["","Имя","Статус","vCPU","Память","Диски / хранилище"]],
+    ["#vmsBody","thead th",["","Имя","Статус","vCPU","Память","Диски / хранилище","В настройках бэкапа"]],
     ["#backupsBody","thead th",["VM","Каталог","Статус","Тип","Диски","Фактически","Checkpoint",""]]
   ];
   for(const [bodySelector,headerSelector,labels] of tableMaps){
@@ -649,8 +659,10 @@ async function deleteBackup(button){
     "Permanently delete backup "+vm+" / "+directory+"?"))return;
   button.disabled=true;
   try{
-    await post("api/backups/delete",{backup_dir:decodeURIComponent(path)});
-    backupNotice(staticText("backup.delete_done","Backup deleted."),"good");
+    const result=await post("api/backups/delete",{backup_dir:decodeURIComponent(path)});
+    if(result.audit_written===false){
+      backupNotice(staticText("backup.delete_audit_error","Backup deleted, but the audit entry could not be saved."),"warn");
+    }else backupNotice(staticText("backup.delete_done","Backup deleted."),"good");
   }catch(e){
     backupNotice(uiLang==="ru"?t("backup.delete_error",{error:e.message}):"Backup deletion failed: "+e.message,"bad");
   }finally{
@@ -663,7 +675,7 @@ async function deleteBackup(button){
 async function loadVms(){
   const selected=new Set(selectedVmNames());
   const body=document.getElementById("vmsBody");
-  body.innerHTML='<tr><td colspan="7"><span class="spinner"></span> '+esc(uiLang==="ru"?"Загрузка инвентаризации Engine…":"Loading Engine disk inventory…")+'</td></tr>';
+  body.innerHTML='<tr><td colspan="8"><span class="spinner"></span> '+esc(uiLang==="ru"?"Загрузка инвентаризации Engine…":"Loading Engine disk inventory…")+'</td></tr>';
   const d=await api("api/vms?details=1");
   currentVms=d.vms||[];
   body.innerHTML=currentVms.map(v=>{
@@ -676,8 +688,10 @@ async function loadVms(){
       '<td><strong>'+esc(v.name)+'</strong><div class="code-id">'+esc(v.id)+'</div></td>'+
       '<td class="'+statusClass(v.status)+'">'+esc(localizedStatus(v.status))+'</td><td>'+esc(v.cpu_cores||"—")+'</td>'+
       '<td>'+fmtBytes(v.memory)+'</td><td>'+disks+'</td>'+
+      '<td><span class="pill '+(v.configured_for_backup?"good":"muted")+'">'+esc(v.configured_for_backup?
+        staticText("vms.in_config","Included"):staticText("vms.not_in_config","Excluded"))+'</span></td>'+
       '<td class="vm-actions"><button class="action vm-backup-btn">'+esc(staticText("action.backup_vm","Create backup"))+'</button></td></tr>';
-  }).join("")||'<tr><td colspan="7" class="muted">'+esc(staticText("state.no_vms","No VMs"))+'</td></tr>';
+  }).join("")||'<tr><td colspan="8" class="muted">'+esc(staticText("state.no_vms","No VMs"))+'</td></tr>';
 }
 function selectedVmNames(){
   return [...document.querySelectorAll(".vm-select:checked")].map(x=>x.value);
@@ -745,10 +759,14 @@ async function useSelectedForConfig(){
 async function loadLogs(kind=currentLogKind){
   currentLogKind=kind;
   const d=await api("api/logs?kind="+encodeURIComponent(kind)+"&lines=600");
+  if(kind!==currentLogKind)return;
   document.getElementById("logsTitle").textContent=kind==="restore"?staticText("log.restore","Native restore log"):staticText("log.backup","Native backup log");
-  document.getElementById("logPath").textContent=d.path||"Log not configured";
+  document.getElementById("logPath").textContent=d.path||staticText("log.not_configured","Log file not configured");
   const box=document.getElementById("logBox");
-  box.textContent=d.lines.join("\n")||"No log entries";
+  box.textContent=d.lines.join("\n")||staticText("log.no_entries","No log entries");
+  const deletions=d.deletions||[];
+  document.getElementById("deletionLog").hidden=!deletions.length;
+  document.getElementById("deletionLogBox").textContent=deletions.join("\n");
   box.scrollTop=box.scrollHeight;
 }
 async function loadHealth(){
@@ -1149,6 +1167,7 @@ document.getElementById("vmsBody").addEventListener("click",event=>{
 document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{
   showPage(b.dataset.page);
   if(b.dataset.page==="vms")loadVms().catch(console.warn);
+  if(b.dataset.page==="logs")loadLogs().catch(console.warn);
   if(b.dataset.page==="scheduler")loadScheduler(true).catch(console.warn);
   if(b.dataset.page==="settings")loadSettings().catch(console.warn);
 });

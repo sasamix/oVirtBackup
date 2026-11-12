@@ -123,7 +123,9 @@ native log path is absent.
 The Backups page can delete an individual native backup after confirmation.
 Deletion takes the native operation lock and refuses to proceed during a
 manual or legacy operation. A partially deleted copy is excluded from
-restore and can be retried from the Backups page.
+restore and can be retried from the Backups page. Successful deletions appear
+in the native backup log tab. The VM inventory shows whether each VM is in
+the saved backup selection.
 
 ## Retention preview
 
