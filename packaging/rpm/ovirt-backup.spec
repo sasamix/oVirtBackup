@@ -33,6 +33,8 @@ install -Dpm 0755 restore_native.py \
     %{buildroot}%{_libexecdir}/ovirt-backup/restore_native.py
 install -Dpm 0755 web/ovirt_backup_web.py \
     %{buildroot}%{_libexecdir}/ovirt-backup/ovirt_backup_web.py
+install -Dpm 0755 web/ovirt_backup_runner.py \
+    %{buildroot}%{_libexecdir}/ovirt-backup/ovirt_backup_runner.py
 install -Dpm 0644 web/static/index.html \
     %{buildroot}%{_datadir}/ovirt-backup/web/index.html
 
@@ -54,6 +56,7 @@ install -Dpm 0644 packaging/logrotate/ovirt-backup \
 
 install -d %{buildroot}%{_localstatedir}/lib/ovirt-backup
 install -d %{buildroot}%{_localstatedir}/lib/ovirt-backup/config-backups
+install -d %{buildroot}%{_localstatedir}/lib/ovirt-backup/web-operations
 install -d %{buildroot}%{_localstatedir}/log/ovirt-backup
 
 %pre
@@ -88,6 +91,7 @@ fi
 %{_libexecdir}/ovirt-backup/backup_native.py
 %{_libexecdir}/ovirt-backup/restore_native.py
 %{_libexecdir}/ovirt-backup/ovirt_backup_web.py
+%{_libexecdir}/ovirt-backup/ovirt_backup_runner.py
 %{_datadir}/ovirt-backup/web/index.html
 %dir %attr(0750,root,ovirt-backup) %{_sysconfdir}/ovirt-backup
 %dir %attr(0750,ovirt-backup,ovirt-backup) %{_sysconfdir}/ovirt-backup/config
@@ -100,12 +104,14 @@ fi
 %{_unitdir}/ovirt-backup-web.service
 %dir %attr(0750,ovirt-backup,ovirt-backup) %{_localstatedir}/lib/ovirt-backup
 %dir %attr(0750,ovirt-backup,ovirt-backup) %{_localstatedir}/lib/ovirt-backup/config-backups
+%dir %attr(0750,ovirt-backup,ovirt-backup) %{_localstatedir}/lib/ovirt-backup/web-operations
 %dir %attr(0750,ovirt-backup,ovirt-backup) %{_localstatedir}/log/ovirt-backup
 
 %changelog
 * Thu Nov 12 2026 sasamix <asm@pioner.kz> - 0.2.0-0.1
 - Validated configuration console with atomic settings writes.
 - VM disk/storage inventory, native dry-run and retention preview.
+- Persistent manual backup/restore runner and operation status UI.
 - Separate backup/restore logs and native operation lock status.
 - Canonical writable config isolated under /etc/ovirt-backup/config.
 
