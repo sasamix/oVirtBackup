@@ -695,13 +695,16 @@ def finalize_transfer(connection, transfer, disk_id, cp):
 
 def download_disk(connection, backup, disk, disk_dir, cp):
     disk_id = disk.id
-    target = disk_dir / ("%s.qcow2" % disk_id)
+    # FULL backups are stored as sparse RAW. This avoids qcow2 random-read
+    # amplification over NFS during restore. Incremental backups require qcow2
+    # and are intentionally outside the current FULL-only backup scheme.
+    target = disk_dir / ("%s.raw" % disk_id)
     transfer = create_transfer(connection, backup.id, disk_id, cp)
     download_started = time.monotonic()
 
     try:
         kwargs = {
-            "fmt": "qcow2",
+            "fmt": "raw",
             "secure": cp.getboolean("config", "verify_tls", fallback=True),
             "buffer_size": imageio_client.BUFFER_SIZE,
             "max_workers": cp.getint(
@@ -747,16 +750,23 @@ def download_disk(connection, backup, disk, disk_dir, cp):
 
     download_seconds = time.monotonic() - download_started
 
-    LOG.info("Checking qcow2 disk %s with qemu-img", disk_id)
-    subprocess.run(
-        ["qemu-img", "check", "-q", str(target)],
-        check=True,
-    )
     info = json.loads(
         subprocess.check_output(
             ["qemu-img", "info", "--output=json", str(target)],
             text=True,
         )
+    )
+    if info.get("format") != "raw":
+        raise RuntimeError(
+            "FULL backup disk %s was requested as RAW but qemu-img reports %r"
+            % (disk_id, info.get("format"))
+        )
+    if not info.get("virtual-size"):
+        raise RuntimeError(
+            "FULL backup RAW disk %s has invalid virtual size" % disk_id
+        )
+    LOG.info(
+        "Validated sparse RAW backup disk %s with qemu-img info", disk_id
     )
 
     LOG.info(
