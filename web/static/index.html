@@ -57,6 +57,11 @@ input[type=checkbox]{width:auto;transform:scale(1.1)}
 .disk{margin-bottom:6px}.disk:last-child{margin-bottom:0}.storage{font-size:12px;color:var(--muted)}
 .code-id{font:12px ui-monospace,SFMono-Regular,Consolas,monospace;color:var(--muted)}
 .spinner{display:inline-block;width:12px;height:12px;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite}
+.scheduler-grid{grid-template-columns:repeat(4,minmax(0,1fr))}
+.weekday-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:8px}
+.weekday-grid label{display:flex;align-items:center;gap:7px;padding:8px 9px;border:1px solid var(--line);border-radius:8px;background:var(--panel2)}
+@media(max-width:1100px){.scheduler-grid{grid-template-columns:repeat(2,1fr)}.weekday-grid{grid-template-columns:repeat(4,1fr)}}
+@media(max-width:600px){.scheduler-grid{grid-template-columns:1fr}.weekday-grid{grid-template-columns:repeat(2,1fr)}}
 @keyframes spin{to{transform:rotate(360deg)}}
 @media(max-width:1100px){.grid{grid-template-columns:repeat(2,1fr)}.settings-grid{grid-template-columns:1fr}}
 @media(max-width:950px){.shell{grid-template-columns:1fr}nav{display:flex;position:static;height:auto;overflow:auto;border-right:0;border-bottom:1px solid var(--line)}nav button{width:auto;white-space:nowrap}}
@@ -79,6 +84,7 @@ input[type=checkbox]{width:auto;transform:scale(1.1)}
   <button data-page="backups" data-i18n="nav.backups">Backups</button>
   <button data-page="logs" data-i18n="nav.logs">Logs</button>
   <button data-page="health" data-i18n="nav.health">Health</button>
+  <button data-page="scheduler" data-i18n="nav.scheduler">Scheduler</button>
   <button data-page="settings" data-i18n="nav.settings">Settings</button>
 </nav>
 <main>
@@ -141,6 +147,71 @@ input[type=checkbox]{width:auto;transform:scale(1.1)}
 <section id="health" class="page">
   <div class="section-title"><h2 data-i18n="health.title">Health</h2></div>
   <div id="healthList"></div>
+</section>
+
+<section id="scheduler" class="page">
+  <div class="section-title">
+    <div>
+      <h2 style="margin:0" data-i18n="scheduler.title">Native scheduler</h2>
+      <span class="muted" data-i18n="scheduler.subtitle">Configure the native systemd timer without changing legacy cron.</span>
+    </div>
+    <div class="toolbar">
+      <button class="action" onclick="loadScheduler(true)" data-i18n="action.reload">Reload</button>
+      <button class="action" onclick="validateScheduler()" data-i18n="action.validate">Validate</button>
+      <button class="action primary" onclick="saveScheduler()" data-i18n="action.save">Save</button>
+    </div>
+  </div>
+
+  <div id="schedulerNotice"></div>
+
+  <div class="grid scheduler-grid">
+    <div class="card"><h3 data-i18n="scheduler.timer_state">Timer</h3><div id="schedulerTimerState" class="big">…</div><div id="schedulerTimerInfo" class="muted"></div></div>
+    <div class="card"><h3 data-i18n="scheduler.next_run">Next run</h3><div id="schedulerNextRun" class="big">…</div><div id="schedulerCalendar" class="muted"></div></div>
+    <div class="card"><h3 data-i18n="scheduler.last_run">Last trigger</h3><div id="schedulerLastRun" class="big">…</div><div id="schedulerServiceState" class="muted"></div></div>
+    <div class="card"><h3 data-i18n="scheduler.migration_guard">Migration guard</h3><div id="schedulerGuardState" class="big">…</div><div id="schedulerGuardInfo" class="muted"></div></div>
+  </div>
+
+  <div class="section card">
+    <div class="settings-grid">
+      <div class="field">
+        <div class="field-label" data-i18n="scheduler.enabled">Enable native timer</div>
+        <div class="check-row">
+          <input id="schedulerEnabled" type="checkbox">
+          <label for="schedulerEnabled" data-i18n="scheduler.enabled_hint">Enable only after legacy cron cutover</label>
+        </div>
+      </div>
+      <div class="field">
+        <div class="field-label" data-i18n="scheduler.time">Start time</div>
+        <input id="schedulerTime" type="time" value="02:00">
+      </div>
+      <div class="field">
+        <div class="field-label" data-i18n="scheduler.timezone">Timezone</div>
+        <input id="schedulerTimezone" type="text" value="Asia/Almaty">
+      </div>
+      <div class="field">
+        <div class="field-label" data-i18n="scheduler.random_delay">Random delay (seconds)</div>
+        <input id="schedulerRandomDelay" type="number" min="0" max="3600" step="1" value="0">
+      </div>
+    </div>
+
+    <div class="field" style="margin-top:12px">
+      <div class="field-label" data-i18n="scheduler.weekdays">Days of week</div>
+      <div class="weekday-grid">
+        <label><input type="checkbox" data-scheduler-day="mon" checked> <span data-i18n="day.mon">Mon</span></label>
+        <label><input type="checkbox" data-scheduler-day="tue" checked> <span data-i18n="day.tue">Tue</span></label>
+        <label><input type="checkbox" data-scheduler-day="wed" checked> <span data-i18n="day.wed">Wed</span></label>
+        <label><input type="checkbox" data-scheduler-day="thu" checked> <span data-i18n="day.thu">Thu</span></label>
+        <label><input type="checkbox" data-scheduler-day="fri" checked> <span data-i18n="day.fri">Fri</span></label>
+        <label><input type="checkbox" data-scheduler-day="sat" checked> <span data-i18n="day.sat">Sat</span></label>
+        <label><input type="checkbox" data-scheduler-day="sun" checked> <span data-i18n="day.sun">Sun</span></label>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title"><h2 data-i18n="scheduler.guard_details">Legacy guard details</h2></div>
+    <pre id="schedulerGuardDetails" data-i18n="scheduler.no_guard_details">No legacy cron/process detected.</pre>
+  </div>
 </section>
 
 <section id="settings" class="page">
@@ -210,6 +281,7 @@ let currentLogKind="backup";
 let currentVms=[];
 let restoreBackupPath="";
 let restoreSourceVm="";
+let schedulerData=null;
 
 
 const browserLanguage=String(
@@ -222,7 +294,7 @@ const I18N={
   ru:{
     "brand.console":"Консоль резервного копирования",
     "action.refresh":"Обновить","nav.dashboard":"Обзор","nav.vms":"Виртуальные машины",
-    "nav.backups":"Резервные копии","nav.logs":"Журналы","nav.health":"Состояние","nav.settings":"Настройки",
+    "nav.backups":"Резервные копии","nav.logs":"Журналы","nav.health":"Состояние","nav.scheduler":"Планировщик","nav.settings":"Настройки",
     "dashboard.engine":"Engine","dashboard.repo_free":"Свободно в хранилище","dashboard.last_backup":"Последняя копия",
     "dashboard.native_lock":"Блокировка native","dashboard.scheduler":"Планировщик",
     "dashboard.manual_operation":"Ручная операция","dashboard.recent_backups":"Последние копии",
@@ -282,6 +354,23 @@ const I18N={
     "field.one_per_line":"По одному значению в строке","field.secret_stored":"Сохранён; оставьте пустым, чтобы не менять",
     "field.secret_enter":"Введите пароль","field.advanced":"дополнительно",
     "settings.unmanaged":"Существующие неуправляемые параметры",
+    "scheduler.title":"Планировщик native backup",
+    "scheduler.subtitle":"Настройка native systemd timer без изменения старого cron.",
+    "scheduler.timer_state":"Timer","scheduler.next_run":"Следующий запуск","scheduler.last_run":"Последний запуск",
+    "scheduler.migration_guard":"Защита миграции","scheduler.enabled":"Включить native timer",
+    "scheduler.enabled_hint":"Включать только после отключения старого cron","scheduler.time":"Время запуска",
+    "scheduler.timezone":"Часовой пояс","scheduler.random_delay":"Случайная задержка (секунд)",
+    "scheduler.weekdays":"Дни недели","scheduler.guard_details":"Состояние старого cron",
+    "scheduler.no_guard_details":"Старый cron/process не обнаружен.",
+    "scheduler.guard_clear":"Чисто","scheduler.guard_blocked":"БЛОКИРОВКА",
+    "scheduler.disabled":"выключен","scheduler.enabled_state":"включён",
+    "scheduler.validation_ok":"Расписание корректно: {calendar}",
+    "scheduler.saved":"Настройки планировщика сохранены.",
+    "scheduler.enable_confirm":"Включить native timer сейчас? Это допустимо только после cutover со старого cron.",
+    "scheduler.load_error":"Не удалось загрузить планировщик: {error}",
+    "scheduler.save_error":"Не удалось сохранить планировщик: {error}",
+    "scheduler.validate_error":"Ошибка проверки планировщика: {error}",
+    "day.mon":"Пн","day.tue":"Вт","day.wed":"Ср","day.thu":"Чт","day.fri":"Пт","day.sat":"Сб","day.sun":"Вс",
     "check.ok":"✓ OK","check.fail":"✕ ОШИБКА"
   },
   en:{}
@@ -710,6 +799,90 @@ async function startRestore(){
   }
 }
 
+function schedulerNotice(text,kind="muted"){
+  const box=document.getElementById("schedulerNotice");
+  box.innerHTML=text?'<div class="notice '+kind+'">'+esc(text)+'</div>':"";
+}
+function collectScheduler(){
+  return {
+    enabled:document.getElementById("schedulerEnabled").checked,
+    time:document.getElementById("schedulerTime").value,
+    timezone:document.getElementById("schedulerTimezone").value.trim(),
+    randomized_delay_seconds:Number(document.getElementById("schedulerRandomDelay").value||0),
+    weekdays:[...document.querySelectorAll("[data-scheduler-day]:checked")].map(x=>x.dataset.schedulerDay)
+  };
+}
+function renderScheduler(data,fillForm=true){
+  schedulerData=data;
+  const cfg=data.config||{};
+  const timer=data.timer||{};
+  const guard=data.migration_guard||{};
+  if(fillForm){
+    document.getElementById("schedulerEnabled").checked=!!cfg.enabled;
+    document.getElementById("schedulerTime").value=cfg.time||"02:00";
+    document.getElementById("schedulerTimezone").value=cfg.timezone||"Asia/Almaty";
+    document.getElementById("schedulerRandomDelay").value=cfg.randomized_delay_seconds??0;
+    const days=new Set(cfg.weekdays||[]);
+    document.querySelectorAll("[data-scheduler-day]").forEach(x=>x.checked=days.has(x.dataset.schedulerDay));
+  }
+  document.getElementById("schedulerTimerState").textContent=timer.enabled?
+    (uiLang==="ru"?"включён":"enabled"):(uiLang==="ru"?"выключен":"disabled");
+  document.getElementById("schedulerTimerState").className="big "+(timer.enabled?"good":"muted");
+  document.getElementById("schedulerTimerInfo").textContent=(timer.active_state||"unknown")+" · "+(timer.sub_state||"—");
+  document.getElementById("schedulerNextRun").textContent=timer.next_elapse||"—";
+  document.getElementById("schedulerCalendar").textContent=data.calendar||"—";
+  document.getElementById("schedulerLastRun").textContent=timer.last_trigger||"—";
+  document.getElementById("schedulerServiceState").textContent=
+    "service="+(timer.service_active_state||"—")+" · result="+(timer.service_result||"—");
+  document.getElementById("schedulerGuardState").textContent=guard.blocked?
+    staticText("scheduler.guard_blocked","BLOCKED"):staticText("scheduler.guard_clear","Clear");
+  document.getElementById("schedulerGuardState").className="big "+(guard.blocked?"warn":"good");
+  document.getElementById("schedulerGuardInfo").textContent=guard.reason||staticText("scheduler.no_guard_details","No legacy cron/process detected.");
+  const details=[];
+  (data.legacy_cron_entries||[]).forEach(x=>details.push("CRON  "+x.source+":"+x.line_number+"  "+x.line));
+  (data.legacy_processes||[]).forEach(x=>details.push("PROC  pid="+x.pid+"  "+x.command));
+  document.getElementById("schedulerGuardDetails").textContent=
+    details.join("\n")||staticText("scheduler.no_guard_details","No legacy cron/process detected.");
+}
+async function loadScheduler(fillForm=true){
+  try{
+    const d=await api("api/scheduler");
+    renderScheduler(d,fillForm);
+    schedulerNotice("");
+    return d;
+  }catch(e){
+    schedulerNotice(uiLang==="ru"?t("scheduler.load_error",{error:e.message}):("Cannot load scheduler: "+e.message),"bad");
+    throw e;
+  }
+}
+async function validateScheduler(){
+  try{
+    const d=await post("api/scheduler/validate",{scheduler:collectScheduler()});
+    schedulerNotice(
+      uiLang==="ru"?t("scheduler.validation_ok",{calendar:d.calendar||""}):("Schedule is valid: "+(d.calendar||"")),
+      d.migration_guard?.blocked?"warn":"good"
+    );
+    return d;
+  }catch(e){
+    schedulerNotice(uiLang==="ru"?t("scheduler.validate_error",{error:e.message}):("Scheduler validation failed: "+e.message),"bad");
+    return null;
+  }
+}
+async function saveScheduler(){
+  const cfg=collectScheduler();
+  const validation=await validateScheduler();
+  if(!validation)return;
+  if(cfg.enabled && !confirm(staticText("scheduler.enable_confirm","Enable the native timer now? Do this only after legacy cron cutover.")))return;
+  try{
+    const d=await post("api/scheduler",{scheduler:cfg});
+    renderScheduler(d,true);
+    schedulerNotice(staticText("scheduler.saved","Scheduler settings saved."),"good");
+    await loadOverview();
+  }catch(e){
+    schedulerNotice(uiLang==="ru"?t("scheduler.save_error",{error:e.message}):("Cannot save scheduler: "+e.message),"bad");
+  }
+}
+
 async function loadSettings(){
   try{
     const d=await api("api/settings");
@@ -790,13 +963,14 @@ async function saveSettings(){
 }
 
 async function refreshAll(){
-  for(const fn of [loadOverview,loadOperation,loadBackups,loadVms,()=>loadLogs(currentLogKind),loadHealth,loadSettings]){
+  for(const fn of [loadOverview,loadOperation,loadBackups,loadVms,()=>loadLogs(currentLogKind),loadHealth,()=>loadScheduler(true),loadSettings]){
     try{await fn()}catch(e){console.warn(e)}
   }
 }
 document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{
   showPage(b.dataset.page);
   if(b.dataset.page==="vms")loadVms().catch(console.warn);
+  if(b.dataset.page==="scheduler")loadScheduler(true).catch(console.warn);
   if(b.dataset.page==="settings")loadSettings().catch(console.warn);
 });
 refreshAll();
