@@ -140,10 +140,43 @@ systemctl status ovirt-backup-web.service --no-pager --full || {
 echo
 echo "=== Local authenticated API ==="
 API_TOKEN="$(cat "$TOKEN")"
-curl -fsS     -H "Authorization: Bearer $API_TOKEN"     http://127.0.0.1:8765/api/capabilities
+
+API_READY=0
+API_RESPONSE="$(mktemp /tmp/ovirt-backup-api.XXXXXX)"
+trap 'rm -f "$API_RESPONSE"' EXIT
+
+for attempt in $(seq 1 40); do
+    if curl -fsS         -H "Authorization: Bearer $API_TOKEN"         http://127.0.0.1:8765/api/capabilities         > "$API_RESPONSE" 2>/dev/null
+    then
+        API_READY=1
+        break
+    fi
+
+    if ! systemctl is-active --quiet ovirt-backup-web.service; then
+        echo "ERROR: ovirt-backup-web.service stopped before API became ready"
+        systemctl status ovirt-backup-web.service --no-pager --full || true
+        journalctl -u ovirt-backup-web.service -n 120 --no-pager || true
+        exit 1
+    fi
+
+    sleep 0.25
+done
+
+if [ "$API_READY" -ne 1 ]; then
+    echo "ERROR: web service stayed active but API did not become ready"
+    ss -ltnp 2>/dev/null | grep ':8765' || true
+    journalctl -u ovirt-backup-web.service -n 120 --no-pager || true
+    exit 1
+fi
+
+cat "$API_RESPONSE"
 echo
+
 curl -fsS     -H "Authorization: Bearer $API_TOKEN"     http://127.0.0.1:8765/api/settings >/dev/null
+
 echo "Settings API: OK"
+rm -f "$API_RESPONSE"
+trap - EXIT
 
 if command -v httpd >/dev/null 2>&1 && systemctl list-unit-files httpd.service >/dev/null 2>&1; then
     echo
