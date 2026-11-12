@@ -1609,6 +1609,7 @@ class Application:
                 "active": False,
                 "operation": None,
                 "lock": operation_lock_state(self.operation_lock),
+                "legacy_backup_processes": legacy_backup_processes(),
             }
 
         if not operation_id:
@@ -1616,6 +1617,7 @@ class Application:
                 "active": False,
                 "operation": None,
                 "lock": operation_lock_state(self.operation_lock),
+                "legacy_backup_processes": legacy_backup_processes(),
             }
 
         state_path = self.operation_dir / ("%s.json" % operation_id)
@@ -1626,6 +1628,7 @@ class Application:
                 "operation": None,
                 "error": "operation state is missing: %s" % state_path,
                 "lock": operation_lock_state(self.operation_lock),
+                "legacy_backup_processes": legacy_backup_processes(),
             }
 
         if include_log:
@@ -1635,6 +1638,7 @@ class Application:
             "active": state.get("status") in ("starting", "running"),
             "operation": state,
             "lock": operation_lock_state(self.operation_lock),
+            "legacy_backup_processes": legacy_backup_processes(),
         }
 
     def _start_operation(self, kind, command, metadata):
@@ -1713,6 +1717,7 @@ class Application:
                 "active": True,
                 "operation": state,
                 "lock": operation_lock_state(self.operation_lock),
+                "legacy_backup_processes": legacy_backup_processes(),
             }
 
     def start_backup(self, vm_names):
