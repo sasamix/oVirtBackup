@@ -53,13 +53,27 @@ def configure_logging(cp, debug):
         "native_logger_file_path",
         fallback=cp.get("config", "logger_file_path", fallback=""),
     )
-    opts = {
-        "format": fmt,
-        "level": logging.DEBUG if debug else logging.INFO,
-    }
+    level = logging.DEBUG if debug else logging.INFO
+
+    # Keep progress visible in interactive runs while preserving the logfile
+    # used by unattended/systemd executions.
+    root = logging.getLogger()
+    root.setLevel(level)
+    for handler in list(root.handlers):
+        root.removeHandler(handler)
+
+    formatter = logging.Formatter(fmt)
+
+    console = logging.StreamHandler()
+    console.setLevel(level)
+    console.setFormatter(formatter)
+    root.addHandler(console)
+
     if filename:
-        opts["filename"] = filename
-    logging.basicConfig(**opts)
+        file_handler = logging.FileHandler(filename)
+        file_handler.setLevel(level)
+        file_handler.setFormatter(formatter)
+        root.addHandler(file_handler)
 
 
 def connect(cp):
@@ -561,16 +575,42 @@ class LogProgress:
 
 
 def create_transfer(connection, backup_id, disk_id, cp):
-    transfers = connection.system_service().image_transfers_service()
+    system = connection.system_service()
+    transfers = system.image_transfers_service()
     policy = cp.get(
         "config", "imageio_timeout_policy", fallback="cancel"
     )
     timeout = cp.getint("config", "imageio_timeout", fallback=120)
 
+    # Backup download and restore upload may have different optimal hosts.
+    # Pinning the download host keeps the transfer on the storage host closest
+    # to the source disk, while imageio_upload_host is handled by restore.
+    host_name = cp.get(
+        "config", "imageio_download_host", fallback=""
+    ).strip()
+    transfer_host = None
+    if host_name:
+        matches = system.hosts_service().list(search="name=%s" % host_name)
+        exact = [host for host in matches if host.name == host_name]
+        if not exact:
+            raise RuntimeError("ImageIO download host %r not found" % host_name)
+        if len(exact) != 1:
+            raise RuntimeError(
+                "ImageIO download host name %r is not unique" % host_name
+            )
+        transfer_host = types.Host(id=exact[0].id)
+        LOG.info(
+            "Pinning download ImageTransfer for disk %s to host %s (%s)",
+            disk_id,
+            exact[0].name,
+            exact[0].id,
+        )
+
     transfer = transfers.add(
         types.ImageTransfer(
             disk=types.Disk(id=disk_id),
             backup=types.Backup(id=backup_id),
+            host=transfer_host,
             direction=types.ImageTransferDirection.DOWNLOAD,
             format=types.DiskFormat.RAW,
             timeout_policy=types.ImageTransferTimeoutPolicy(policy),
