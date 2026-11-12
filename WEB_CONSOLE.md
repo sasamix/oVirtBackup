@@ -26,6 +26,22 @@ The backend runs as the unprivileged `ovirt-backup` user. Only
 `/etc/ovirt-backup/config/` is writable inside the systemd sandbox. The
 parent directory and `web.token` are not writable by the console.
 
+## Engine session
+
+The web process opens an oVirt SDK connection on its first Engine request
+and reuses it for overview, VM inventory, health, configuration checks and
+restore options. A lock serializes Engine operations across HTTP request
+threads. If the SDK or transport fails, the console discards the connection,
+reconnects and retries the read operation once. The SDK can renew its SSO
+token when Engine expires it. The web service closes the connection on
+shutdown, including when stopped by systemd.
+
+Changing the saved Engine URL, credentials or TLS settings replaces the
+shared connection on the next Engine request. Validating a draft with
+different connection settings uses a temporary connection so the active
+session stays available. Manual backup and restore run in separate
+processes with their own Engine connections.
+
 ## API
 
 Read operations:
@@ -116,10 +132,10 @@ Before starting the web service after an update, run:
 /usr/bin/python3 /usr/libexec/ovirt-backup/ovirt_backup_web.py --self-test
 ```
 
-The self-test uses a temporary directory only. It verifies schema coercion,
-blank-password preservation, atomic config replacement/config history and
-read-only retention preview. It does not connect to Engine and does not touch
-the live configuration or backup repository.
+The self-test uses a temporary directory and a simulated SDK connection.
+It verifies schema coercion, blank-password preservation, atomic config
+replacement/config history, read-only retention preview, connection reuse,
+a single reconnect, draft connection cleanup and shutdown.
 
 ## Manual operations
 

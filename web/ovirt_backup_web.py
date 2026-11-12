@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -21,6 +22,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import ovirtsdk4 as sdk
+import pycurl
 
 LOG = logging.getLogger("ovirt-backup-web")
 MAX_VMS = 400
@@ -844,44 +846,106 @@ def rpm_version(package):
     return result["output"] if result["ok"] else None
 
 
-def connect_engine(cp):
+ENGINE_RETRY_ERRORS = (sdk.Error, pycurl.error, ConnectionError, TimeoutError)
+
+
+def engine_connection_options(cp):
     verify_tls = cp.getboolean("config", "verify_tls", fallback=True)
     ca_file = cp.get(
         "config", "ca_file", fallback="/etc/pki/ovirt-engine/ca.pem"
     )
-    return sdk.Connection(
-        url=cp.get("config", "server"),
-        username=cp.get("config", "username"),
-        password=cp.get("config", "password"),
-        ca_file=ca_file if verify_tls else None,
-        insecure=not verify_tls,
-        debug=False,
-    )
+    return {
+        "url": cp.get("config", "server"),
+        "username": cp.get("config", "username"),
+        "password": cp.get("config", "password"),
+        "ca_file": ca_file if verify_tls else None,
+        "insecure": not verify_tls,
+    }
 
 
-def engine_summary(cp):
-    started = time.monotonic()
-    try:
-        connection = connect_engine(cp)
+class EngineSession:
+    def __init__(self):
+        self._lock = threading.Lock()
+        self.stopping = False
+        self._connection = None
+        self._options = None
+
+    def ensure_running(self):
+        if self.stopping:
+            raise RuntimeError("web console is stopping")
+
+    @staticmethod
+    def _close_connection(connection):
+        if connection is None:
+            return
         try:
-            api = connection.system_service().get()
-            version = None
-            try:
-                v = api.product_info.version
-                version = ".".join(
-                    str(x)
-                    for x in (v.major, v.minor, v.build, v.revision)
-                    if x is not None
-                )
-            except Exception:
-                pass
-            return {
-                "ok": True,
-                "api_version": version,
-                "latency_ms": round((time.monotonic() - started) * 1000, 1),
-            }
-        finally:
             connection.close()
+        except ENGINE_RETRY_ERRORS:
+            # An unreachable Engine may prevent logout. Release local handles.
+            LOG.warning("Engine session logout failed")
+            connection.close(logout=False)
+
+    def _discard(self):
+        connection = self._connection
+        self._connection = None
+        self._options = None
+        self._close_connection(connection)
+
+    def close(self):
+        self.stopping = True
+        with self._lock:
+            self._discard()
+
+    def run(self, cp, operation, *, temporary=False):
+        options = engine_connection_options(cp)
+        with self._lock:
+            self.ensure_running()
+            if not temporary and self._options != options:
+                self._discard()
+
+            for attempt in range(2):
+                self.ensure_running()
+                connection = None if temporary else self._connection
+                try:
+                    if connection is None:
+                        connection = sdk.Connection(**options, timeout=15)
+                        if not temporary:
+                            self._connection = connection
+                            self._options = options
+                    return operation(connection)
+                except ENGINE_RETRY_ERRORS:
+                    if not temporary:
+                        self._discard()
+                    if attempt:
+                        raise
+                finally:
+                    if temporary:
+                        self._close_connection(connection)
+
+
+def engine_summary(cp, engine):
+    started = time.monotonic()
+
+    def query(connection):
+        api = connection.system_service().get()
+        version = None
+        try:
+            v = api.product_info.version
+            version = ".".join(
+                str(x)
+                for x in (v.major, v.minor, v.build, v.revision)
+                if x is not None
+            )
+        except Exception:
+            pass
+        return {
+            "ok": True,
+            "api_version": version,
+            "latency_ms": round((time.monotonic() - started) * 1000, 1),
+        }
+
+    try:
+        return engine.run(cp, query)
     except Exception as exc:
         return {
             "ok": False,
@@ -917,16 +981,20 @@ def storage_domain_catalog(system):
     return result
 
 
-def vm_disk_details(connection, system, vm, catalog=None):
+def vm_disk_details(connection, system, vm, engine, catalog):
     service = system.vms_service().vm_service(vm.id)
-    if catalog is None:
-        catalog = storage_domain_catalog(system)
     items = []
+    api_path = urlparse(connection.url).path.rstrip("/") + "/"
     for attachment in service.disk_attachments_service().list():
+        engine.ensure_running()
         disk_id = attachment.disk.id
-        try:
-            disk = connection.follow_link(attachment.disk)
-        except Exception:
+        href = attachment.disk.href
+        if href and href.startswith(api_path):
+            try:
+                disk = connection.follow_link(attachment.disk)
+            except sdk.NotFoundError:
+                disk = system.disks_service().disk_service(disk_id).get()
+        else:
             disk = system.disks_service().disk_service(disk_id).get()
 
         storage_ids = []
@@ -968,14 +1036,14 @@ def vm_disk_details(connection, system, vm, catalog=None):
     return items
 
 
-def list_vms(cp, details=True):
-    connection = connect_engine(cp)
-    try:
+def list_vms(cp, engine, details=True):
+    def query(connection):
         system = connection.system_service()
         service = system.vms_service()
         catalog = storage_domain_catalog(system) if details else None
         items = []
         for vm in service.list(max=MAX_VMS):
+            engine.ensure_running()
             cores = None
             if vm.cpu and vm.cpu.topology:
                 cores = (
@@ -993,15 +1061,18 @@ def list_vms(cp, details=True):
             if details:
                 try:
                     item["disks"] = vm_disk_details(
-                        connection, system, vm, catalog=catalog
+                        connection, system, vm, engine, catalog
                     )
                 except Exception as exc:
+                    if isinstance(exc, ENGINE_RETRY_ERRORS) and not isinstance(
+                        exc, sdk.NotFoundError
+                    ):
+                        raise
                     item["disks"] = []
                     item["disk_error"] = str(exc)
             items.append(item)
         return sorted(items, key=lambda item: item["name"].lower())
-    finally:
-        connection.close()
+    return engine.run(cp, query)
 
 
 def resolve_selected_vms(system, cp):
@@ -1029,13 +1100,14 @@ def resolve_selected_vms(system, cp):
     return selected, missing
 
 
-def config_checks(cp):
+def config_checks(cp, engine, *, temporary=False):
     checks = []
 
-    def add(name, ok, detail, **extra):
-        item = {"name": name, "ok": bool(ok), "detail": str(detail)}
-        item.update(extra)
-        checks.append(item)
+    def check(name, ok, detail):
+        return {"name": name, "ok": bool(ok), "detail": str(detail)}
+
+    def add(name, ok, detail):
+        checks.append(check(name, ok, detail))
 
     verify_tls = cp.getboolean("config", "verify_tls", fallback=True)
     ca_file = cp.get(
@@ -1077,15 +1149,19 @@ def config_checks(cp):
             "%.2f GiB free" % (repo["free_bytes"] / 1024**3),
         )
 
-    engine_data = {
-        "ok": False,
-        "selection": [],
-        "storage_domains": [],
-        "networks": [],
-    }
     try:
-        connection = connect_engine(cp)
-        try:
+        def query(connection):
+            engine_checks = []
+
+            def add(name, ok, detail):
+                engine_checks.append(check(name, ok, detail))
+
+            engine_data = {
+                "ok": False,
+                "selection": [],
+                "storage_domains": [],
+                "networks": [],
+            }
             system = connection.system_service()
             api = system.get()
             version = None
@@ -1100,6 +1176,7 @@ def config_checks(cp):
                 pass
             add("Engine API", True, "API %s" % (version or "unknown"))
 
+            engine.ensure_running()
             selected, missing = resolve_selected_vms(system, cp)
             engine_data["selection"] = selected
             add(
@@ -1115,6 +1192,7 @@ def config_checks(cp):
                 ),
             )
 
+            engine.ensure_running()
             networks = [
                 {
                     "id": network.id,
@@ -1148,6 +1226,7 @@ def config_checks(cp):
                     "not configured; Engine/default route will be used",
                 )
 
+            engine.ensure_running()
             catalog = storage_domain_catalog(system)
             engine_data["storage_domains"] = sorted(
                 catalog.values(),
@@ -1185,6 +1264,7 @@ def config_checks(cp):
             cluster_name = cp.get(
                 "config", "cluster_name", fallback="Default"
             ).strip()
+            engine.ensure_running()
             clusters = system.clusters_service().list(
                 search="name=%s" % cluster_name
             )
@@ -1198,10 +1278,19 @@ def config_checks(cp):
                 "%s (%d match)" % (cluster_name, len(exact_clusters)),
             )
             engine_data["ok"] = True
-        finally:
-            connection.close()
+
+            return engine_checks, engine_data
+
+        engine_checks, engine_data = engine.run(cp, query, temporary=temporary)
+        checks.extend(engine_checks)
     except Exception as exc:
         add("Engine API", False, str(exc))
+        engine_data = {
+            "ok": False,
+            "selection": [],
+            "storage_domains": [],
+            "networks": [],
+        }
 
     return {
         "ok": all(item["ok"] for item in checks),
@@ -1434,14 +1523,14 @@ def resolve_backup_directory(cp, value):
     return target, data
 
 
-def restore_options(cp):
-    connection = connect_engine(cp)
-    try:
+def restore_options(cp, engine):
+    def query(connection):
         system = connection.system_service()
         storages = sorted(
             storage_domain_catalog(system).values(),
             key=lambda item: (item.get("name") or "").lower(),
         )
+        engine.ensure_running()
         clusters = sorted(
             [
                 {
@@ -1471,8 +1560,7 @@ def restore_options(cp):
                 "network_mode": "isolated",
             },
         }
-    finally:
-        connection.close()
+    return engine.run(cp, query)
 
 
 def legacy_backup_processes():
@@ -1505,8 +1593,8 @@ def legacy_backup_processes():
     return sorted(result, key=lambda item: item["pid"])
 
 
-def health(cp):
-    result = config_checks(cp)
+def health(cp, engine):
+    result = config_checks(cp, engine)
     checks = list(result["checks"])
 
     for label, key, fallback in (
@@ -1572,6 +1660,7 @@ class Application:
         self.operation_lock = Path(operation_lock)
         self.scheduler_socket = Path(scheduler_socket)
         self.started = time.time()
+        self.engine = EngineSession()
         self.config_lock = threading.Lock()
         self.operation_start_lock = threading.Lock()
 
@@ -1594,7 +1683,7 @@ class Application:
                     "native timer cannot be enabled while backup configuration has dry_run=True"
                 )
             checks = self._append_config_storage_checks(
-                config_checks(cp)
+                config_checks(cp, self.engine)
             )
             failed = [
                 item for item in checks["checks"]
@@ -1696,7 +1785,10 @@ class Application:
         cp = self.config()
         merged = merge_settings(cp, updates)
         draft = config_from_merged(cp, merged)
-        result = self._append_config_storage_checks(config_checks(draft))
+        temporary = engine_connection_options(draft) != engine_connection_options(cp)
+        result = self._append_config_storage_checks(
+            config_checks(draft, self.engine, temporary=temporary)
+        )
         result["settings"] = {
             key: ("" if SETTINGS_SCHEMA[key]["type"] == "secret" else value)
             for key, value in merged.items()
@@ -1725,7 +1817,7 @@ class Application:
             "backup": backup,
             "settings": settings_payload(saved, self.config_path),
             "checks": self._append_config_storage_checks(
-                config_checks(saved)
+                config_checks(saved, self.engine)
             ),
         }
 
@@ -2116,7 +2208,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({
                     "time_utc": datetime.now(timezone.utc).isoformat(),
                     "uptime_seconds": round(time.time() - self.app.started),
-                    "engine": engine_summary(cp),
+                    "engine": engine_summary(cp, self.app.engine),
                     "repository": repository_stats(cp),
                     "last_backup": backups[0] if backups else None,
                     "backup_count": len(backups),
@@ -2132,10 +2224,10 @@ class Handler(BaseHTTPRequestHandler):
                     },
                 })
             elif path == "/api/health":
-                self.send_json(health(cp))
+                self.send_json(health(cp, self.app.engine))
             elif path == "/api/vms":
                 details = query.get("details", ["1"])[0] not in ("0", "false", "False")
-                self.send_json({"vms": list_vms(cp, details=details)})
+                self.send_json({"vms": list_vms(cp, self.app.engine, details=details)})
             elif path == "/api/backups":
                 vm_name = query.get("vm", [None])[0]
                 limit = int(query.get("limit", ["250"])[0])
@@ -2166,7 +2258,7 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/operations/current":
                 self.send_json(self.app.current_operation())
             elif path == "/api/restore-options":
-                self.send_json(restore_options(cp))
+                self.send_json(restore_options(cp, self.app.engine))
             elif path == "/api/scheduler":
                 self.send_json(self.app.scheduler_status())
             elif path == "/api/capabilities":
@@ -2291,6 +2383,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def self_test():
+    from unittest.mock import Mock, patch
+
     result = {"ok": False, "checks": []}
 
     def check(name, condition, detail=""):
@@ -2354,6 +2448,61 @@ def self_test():
             bool(backup) and Path(backup).is_file(),
             str(backup),
         )
+
+        engine = EngineSession()
+        first, second, draft_connection, failed = (Mock() for _ in range(4))
+        with patch.object(
+            sdk, "Connection", side_effect=[first, second, draft_connection, failed]
+        ) as connect:
+            try:
+                check(
+                    "Engine session reuse",
+                    engine.run(cp, lambda connection: connection) is first
+                    and engine.run(saved, lambda connection: connection) is first
+                    and connect.call_count == 1,
+                )
+
+                operation = Mock(side_effect=[sdk.Error("transport failed"), "ok"])
+                check(
+                    "Engine reconnect",
+                    engine.run(cp, operation) == "ok"
+                    and [call.args[0] for call in operation.call_args_list]
+                    == [first, second]
+                    and first.close.call_count == 1,
+                )
+
+                draft = config_from_merged(cp, {"server": "https://draft.example/api"})
+                check(
+                    "Draft Engine connection",
+                    engine.run(draft, lambda connection: connection, temporary=True)
+                    is draft_connection
+                    and draft_connection.close.call_count == 1
+                    and engine.run(cp, lambda connection: connection) is second,
+                )
+
+                operation = Mock(side_effect=sdk.Error("Engine unavailable"))
+                try:
+                    engine.run(cp, operation)
+                except sdk.Error:
+                    check(
+                        "Engine retry limit",
+                        operation.call_count == 2
+                        and connect.call_count == 4
+                        and second.close.call_count == 1
+                        and failed.close.call_count == 1,
+                    )
+                else:
+                    raise AssertionError("Engine failure was not propagated")
+            finally:
+                engine.close()
+
+        with patch.object(sdk, "Connection", return_value=first):
+            first.reset_mock()
+            engine = EngineSession()
+            engine.run(cp, lambda connection: None)
+            engine.close()
+            engine.close()
+            check("Engine session shutdown", first.close.call_count == 1)
 
         vm_dir = repo / "demo"
         vm_dir.mkdir()
@@ -2431,7 +2580,7 @@ def main():
     parser.add_argument(
         "--self-test",
         action="store_true",
-        help="Run local configuration/retention self-test and exit.",
+        help="Run local configuration, retention and Engine session self-test and exit.",
     )
     args = parser.parse_args()
 
@@ -2458,12 +2607,24 @@ def main():
     server = ThreadingHTTPServer((args.listen, args.port), Handler)
     server.app = app
     LOG.info("oVirt Backup Console listening on http://%s:%s", args.listen, args.port)
+    def stop_service(_signum, _frame):
+        app.engine.stopping = True
+
+    server.timeout = 0.5
+    previous_sigterm = signal.signal(signal.SIGTERM, stop_service)
     try:
-        server.serve_forever()
+        while not app.engine.stopping:
+            server.handle_request()
     except KeyboardInterrupt:
         pass
     finally:
-        server.server_close()
+        try:
+            server.server_close()
+        finally:
+            try:
+                app.engine.close()
+            finally:
+                signal.signal(signal.SIGTERM, previous_sigterm)
 
 
 if __name__ == "__main__":
