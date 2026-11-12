@@ -96,6 +96,19 @@ with `--dry-run --vm-names ...`.
 Dry-run refuses to start while the native operation lock is busy and never
 starts an Engine backup.
 
+## Self-test
+
+Before starting the web service after an update, run:
+
+```bash
+/usr/bin/python3 /usr/libexec/ovirt-backup/ovirt_backup_web.py --self-test
+```
+
+The self-test uses a temporary directory only. It verifies schema coercion,
+blank-password preservation, atomic config replacement/config history and
+read-only retention preview. It does not connect to Engine and does not touch
+the live configuration or backup repository.
+
 ## Target RPM layout
 
 ```text
