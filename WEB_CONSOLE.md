@@ -39,6 +39,7 @@ Validated write operations currently enabled:
 
 - POST /api/settings/validate
 - POST /api/settings
+- POST /api/settings/retention-preview
 - POST /api/actions/dry-run
 
 Real backup, restore and scheduler mutation endpoints are intentionally not
@@ -78,6 +79,13 @@ The Validate action checks:
 - configured ImageIO logical network;
 - default restore storage domain;
 - default restore cluster.
+
+## Retention preview
+
+The Settings page can evaluate the configured age/count retention rules against
+completed native backup directories. The preview reports KEEP/DELETE decisions
+but never deletes files. The algorithm follows backup_native.py order: age
+filter first, then count limit.
 
 ## VM inventory and dry-run
 
