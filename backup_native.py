@@ -528,34 +528,50 @@ def disk_storage_domain_ids(connection, disk):
     Prefer links already present on Disk, then fall back to the disk profile,
     which is bound to a storage domain in the oVirt API model.
     """
+    disk_id = getattr(disk, "id", None)
+
     ids = {
         getattr(ref, "id", None)
         for ref in (getattr(disk, "storage_domains", None) or [])
         if getattr(ref, "id", None)
     }
+    if ids:
+        result = sorted(ids)
+        LOG.info(
+            "Disk %s storage domains resolved from disk.storage_domains: %r",
+            disk_id,
+            result,
+        )
+        return result
 
     singular = getattr(disk, "storage_domain", None)
     singular_id = getattr(singular, "id", None)
     if singular_id:
-        ids.add(singular_id)
-
-    if ids:
-        return sorted(ids)
+        LOG.info(
+            "Disk %s storage domain resolved from disk.storage_domain: %s",
+            disk_id,
+            singular_id,
+        )
+        return [singular_id]
 
     profile_ref = getattr(disk, "disk_profile", None)
     profile_id = getattr(profile_ref, "id", None)
     if not profile_id:
+        LOG.warning(
+            "Disk %s exposes neither storage domain links nor disk profile",
+            disk_id,
+        )
         return []
 
     try:
         profile = connection.follow_link(profile_ref)
-    except Exception:
+    except Exception as exc:
         LOG.warning(
-            "Cannot follow disk profile %s for disk %s; "
+            "Cannot follow disk profile %s for disk %s (%s); "
             "trying DiskProfilesService",
             profile_id,
-            getattr(disk, "id", None),
-            exc_info=True,
+            disk_id,
+            exc,
         )
         try:
             profile = (
@@ -564,17 +580,32 @@ def disk_storage_domain_ids(connection, disk):
                 .disk_profile_service(profile_id)
                 .get()
             )
-        except Exception:
-            LOG.exception(
-                "Cannot resolve disk profile %s for disk %s",
+        except Exception as exc2:
+            LOG.warning(
+                "Cannot resolve disk profile %s for disk %s: %s",
                 profile_id,
-                getattr(disk, "id", None),
+                disk_id,
+                exc2,
             )
             return []
 
     storage_ref = getattr(profile, "storage_domain", None)
     storage_id = getattr(storage_ref, "id", None)
-    return [storage_id] if storage_id else []
+    if storage_id:
+        LOG.info(
+            "Disk %s storage domain resolved via disk profile %s: %s",
+            disk_id,
+            profile_id,
+            storage_id,
+        )
+        return [storage_id]
+
+    LOG.warning(
+        "Disk profile %s for disk %s has no storage_domain link",
+        profile_id,
+        disk_id,
+    )
+    return []
 
 
 def select_disks(connection, system, vm_service, cp):
@@ -623,10 +654,12 @@ def select_disks(connection, system, vm_service, cp):
             # versions where DiskService.get(follow="storage_domains") may
             # return a non-XML error page.
             disk = connection.follow_link(att.disk)
-        except Exception:
-            LOG.exception(
-                "Cannot follow disk link for %s; falling back to DiskService.get()",
+        except Exception as exc:
+            LOG.warning(
+                "Cannot follow disk link for %s (%s); "
+                "falling back to DiskService.get()",
                 disk_id,
+                exc,
             )
             disk = disks_service.disk_service(disk_id).get()
         api_disks.append(types.Disk(id=disk_id))
