@@ -19,6 +19,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import ovirtsdk4 as sdk
 import ovirtsdk4.types as types
@@ -447,7 +448,46 @@ def create_transfer(connection, backup_id, disk_id, cp):
         transfer = service.get()
 
         if transfer.phase == types.ImageTransferPhase.TRANSFERRING:
-            LOG.info("ImageTransfer %s ready for disk %s", transfer.id, disk_id)
+            host_id = getattr(getattr(transfer, "host", None), "id", None)
+            host_name = None
+            host_address = None
+            if host_id:
+                try:
+                    host = (
+                        connection.system_service()
+                        .hosts_service()
+                        .host_service(host_id)
+                        .get()
+                    )
+                    host_name = getattr(host, "name", None)
+                    host_address = getattr(host, "address", None)
+                except Exception:
+                    LOG.exception(
+                        "Cannot resolve ImageTransfer host %s", host_id
+                    )
+
+            def endpoint(value):
+                if not value:
+                    return None
+                parsed = urlsplit(value)
+                if parsed.hostname is None:
+                    return None
+                return "%s:%s" % (
+                    parsed.hostname,
+                    parsed.port or ("443" if parsed.scheme == "https" else ""),
+                )
+
+            LOG.info(
+                "ImageTransfer %s ready for disk %s: host=%s (%s, %s) "
+                "transfer_endpoint=%s proxy_endpoint=%s",
+                transfer.id,
+                disk_id,
+                host_id,
+                host_name,
+                host_address,
+                endpoint(getattr(transfer, "transfer_url", None)),
+                endpoint(getattr(transfer, "proxy_url", None)),
+            )
             return transfer
 
         if transfer.phase == types.ImageTransferPhase.FINISHED_FAILURE:
