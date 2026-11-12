@@ -154,3 +154,15 @@ state remains available after the console comes back.
 
 The RPM does not enable the backup timer automatically. Enabling or replacing
 the existing legacy cron remains a separate final migration step.
+
+
+## Migration guard
+
+During coexistence with the legacy `pioner` cron, the console detects active
+legacy `backup.py` processes. Real native Backup/Restore actions are refused
+while a legacy backup is active, preventing the I/O contention observed during
+migration tests. Settings, inventory, retention preview and native dry-run stay
+available.
+
+This guard does not modify, signal or stop the legacy process and requires no
+change to branch `pioner` or its cron.
