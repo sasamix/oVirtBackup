@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -27,7 +28,8 @@ MAX_VMS = 400
 SENSITIVE_KEYS = {"password", "token", "secret", "web_token"}
 DEFAULT_CONFIG_BACKUP_DIR = "/var/lib/ovirt-backup/config-backups"
 DEFAULT_OPERATION_LOCK = "/var/lib/ovirt-backup/operation.lock"
-CONSOLE_VERSION = "0.3.0"
+DEFAULT_SCHEDULER_SOCKET = "/run/ovirt-backup/scheduler.sock"
+CONSOLE_VERSION = "0.4.0"
 
 # Ordered schema used by both validation and the browser settings form.
 # Values are stored in the existing INI syntax expected by backup_native.py.
@@ -611,6 +613,71 @@ def operation_lock_state(path=DEFAULT_OPERATION_LOCK):
             return {"busy": False, "holder": holder}
     finally:
         fh.close()
+
+
+class SchedulerControllerError(RuntimeError):
+    def __init__(self, message, unavailable=False):
+        super().__init__(message)
+        self.unavailable = unavailable
+
+
+def scheduler_rpc(socket_path, action, config=None, timeout=5):
+    request = {"action": action}
+    if config is not None:
+        request["config"] = config
+
+    payload = (
+        json.dumps(request, ensure_ascii=False, sort_keys=True) + "\n"
+    ).encode("utf-8")
+
+    try:
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        client.settimeout(timeout)
+        client.connect(str(socket_path))
+        try:
+            client.sendall(payload)
+            chunks = []
+            total = 0
+            while True:
+                chunk = client.recv(8192)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                total += len(chunk)
+                if total > 1024 * 1024:
+                    raise SchedulerControllerError(
+                        "scheduler controller response is too large"
+                    )
+                if b"\n" in chunk:
+                    break
+        finally:
+            client.close()
+    except SchedulerControllerError:
+        raise
+    except OSError as exc:
+        raise SchedulerControllerError(
+            "scheduler controller unavailable at %s: %s"
+            % (socket_path, exc),
+            unavailable=True,
+        ) from exc
+
+    raw = b"".join(chunks).split(b"\n", 1)[0]
+    if not raw:
+        raise SchedulerControllerError(
+            "scheduler controller returned an empty response"
+        )
+    try:
+        response = json.loads(raw.decode("utf-8"))
+    except Exception as exc:
+        raise SchedulerControllerError(
+            "invalid scheduler controller response: %s" % exc
+        ) from exc
+
+    if not response.get("ok"):
+        raise SchedulerControllerError(
+            response.get("error") or "scheduler controller rejected request"
+        )
+    return response.get("result") or {}
 
 
 def run_command(args, timeout=5):
@@ -1492,7 +1559,8 @@ class Application:
             runner_script,
             config_backup_dir,
             operation_dir,
-            operation_lock):
+            operation_lock,
+            scheduler_socket):
         self.config_path = Path(config_path)
         self.static_dir = Path(static_dir)
         self.token_file = Path(token_file)
@@ -1502,9 +1570,43 @@ class Application:
         self.config_backup_dir = Path(config_backup_dir)
         self.operation_dir = Path(operation_dir)
         self.operation_lock = Path(operation_lock)
+        self.scheduler_socket = Path(scheduler_socket)
         self.started = time.time()
         self.config_lock = threading.Lock()
         self.operation_start_lock = threading.Lock()
+
+    def scheduler_status(self):
+        return scheduler_rpc(self.scheduler_socket, "status")
+
+    def scheduler_validate(self, config):
+        return scheduler_rpc(
+            self.scheduler_socket,
+            "validate",
+            config=config,
+        )
+
+    def scheduler_apply(self, config):
+        return scheduler_rpc(
+            self.scheduler_socket,
+            "apply",
+            config=config,
+            timeout=15,
+        )
+
+    def scheduler_capability(self):
+        try:
+            result = self.scheduler_status()
+            return {
+                "write": True,
+                "reason": None,
+                "status": result,
+            }
+        except SchedulerControllerError as exc:
+            return {
+                "write": False,
+                "reason": str(exc),
+                "status": None,
+            }
 
     def _ensure_no_legacy_backup(self):
         legacy = legacy_backup_processes()
@@ -2039,11 +2141,9 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/restore-options":
                 self.send_json(restore_options(cp))
             elif path == "/api/scheduler":
-                self.send_json({
-                    "service": systemd_state("ovirt-backup.service"),
-                    "timer": systemd_state("ovirt-backup.timer"),
-                })
+                self.send_json(self.app.scheduler_status())
             elif path == "/api/capabilities":
+                scheduler = self.app.scheduler_capability()
                 self.send_json({
                     "mode": "configuration",
                     "actions_enabled": True,
@@ -2051,10 +2151,11 @@ class Handler(BaseHTTPRequestHandler):
                     "dry_run": True,
                     "backup_now": True,
                     "restore": True,
-                    "scheduler_write": False,
+                    "scheduler_write": scheduler["write"],
                     "reason": (
-                        "Settings, dry-run, manual backup and restore are enabled. "
-                        "Scheduler write actions remain disabled."
+                        scheduler["reason"]
+                        if not scheduler["write"]
+                        else "Settings, manual operations and scheduler configuration are enabled."
                     ),
                 })
             else:
@@ -2084,6 +2185,20 @@ class Handler(BaseHTTPRequestHandler):
 
             if path == "/api/settings/retention-preview":
                 result = self.app.preview_retention(body.get("settings", {}))
+                self.send_json(result)
+                return
+
+            if path == "/api/scheduler/validate":
+                result = self.app.scheduler_validate(
+                    body.get("scheduler", {})
+                )
+                self.send_json(result)
+                return
+
+            if path == "/api/scheduler":
+                result = self.app.scheduler_apply(
+                    body.get("scheduler", {})
+                )
                 self.send_json(result)
                 return
 
@@ -2117,6 +2232,12 @@ class Handler(BaseHTTPRequestHandler):
                     "errors": exc.errors,
                 },
                 HTTPStatus.BAD_REQUEST,
+            )
+        except SchedulerControllerError as exc:
+            self.send_json(
+                {"error": str(exc)},
+                HTTPStatus.SERVICE_UNAVAILABLE
+                if exc.unavailable else HTTPStatus.CONFLICT,
             )
         except BusyOperationError as exc:
             self.send_json(
@@ -2267,6 +2388,10 @@ def main():
         "--operation-lock",
         default=DEFAULT_OPERATION_LOCK,
     )
+    parser.add_argument(
+        "--scheduler-socket",
+        default=DEFAULT_SCHEDULER_SOCKET,
+    )
     parser.add_argument("--listen", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--debug", action="store_true")
@@ -2295,6 +2420,7 @@ def main():
         args.config_backup_dir,
         args.operation_dir,
         args.operation_lock,
+        args.scheduler_socket,
     )
     server = ThreadingHTTPServer((args.listen, args.port), Handler)
     server.app = app
