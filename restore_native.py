@@ -18,13 +18,16 @@ import io
 import json
 import logging
 import os
+import socket
 import subprocess
 import sys
 import threading
 import time
 import uuid
 import xml.etree.ElementTree as ET
+from contextlib import contextmanager
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 import ovirtsdk4 as sdk
 import ovirtsdk4.types as types
@@ -66,6 +69,140 @@ def connect(cp):
         insecure=not verify_tls,
         debug=False,
     )
+
+
+def imageio_network_route(connection, transfer, cp):
+    network_name = cp.get(
+        "config", "imageio_network", fallback=""
+    ).strip()
+    if not network_name:
+        return transfer.transfer_url, None, None
+
+    host_id = getattr(getattr(transfer, "host", None), "id", None)
+    if not host_id:
+        raise RuntimeError(
+            "imageio_network=%s is configured but ImageTransfer %s "
+            "does not report a host"
+            % (network_name, transfer.id)
+        )
+
+    system = connection.system_service()
+    host_service = (
+        system.hosts_service()
+        .host_service(host_id)
+    )
+    host = host_service.get()
+
+    networks = system.networks_service().list(
+        search="name=%s" % network_name
+    )
+    exact = [
+        network for network in networks
+        if getattr(network, "name", None) == network_name
+    ]
+    if len(exact) != 1:
+        raise RuntimeError(
+            "imageio_network %r: expected exactly one logical network, "
+            "found %d" % (network_name, len(exact))
+        )
+    network_id = exact[0].id
+
+    addresses = []
+    for attachment in host_service.network_attachments_service().list():
+        attached_network_id = getattr(
+            getattr(attachment, "network", None), "id", None
+        )
+        if attached_network_id != network_id:
+            continue
+
+        for assignment in (
+            getattr(attachment, "ip_address_assignments", None) or []
+        ):
+            address = getattr(
+                getattr(assignment, "ip", None), "address", None
+            )
+            if address and "." in address:
+                addresses.append(address)
+
+    addresses = sorted(set(addresses))
+    if len(addresses) != 1:
+        raise RuntimeError(
+            "Host %s ImageTransfer %s: logical network %s must have "
+            "exactly one IPv4 address, found %r"
+            % (
+                getattr(host, "name", host_id),
+                transfer.id,
+                network_name,
+                addresses,
+            )
+        )
+
+    target_ip = addresses[0]
+    parsed = urlsplit(transfer.transfer_url)
+    if not parsed.scheme or not parsed.path:
+        raise RuntimeError(
+            "Invalid ImageTransfer URL for %s" % transfer.id
+        )
+
+    tls_hostname = (
+        getattr(host, "name", None)
+        or parsed.hostname
+    )
+    if not tls_hostname:
+        raise RuntimeError(
+            "Cannot determine TLS hostname for ImageTransfer %s"
+            % transfer.id
+        )
+
+    port = parsed.port
+    netloc = tls_hostname
+    if port is not None:
+        netloc = "%s:%d" % (tls_hostname, port)
+
+    routed_url = urlunsplit(
+        (
+            parsed.scheme,
+            netloc,
+            parsed.path,
+            parsed.query,
+            parsed.fragment,
+        )
+    )
+
+    LOG.info(
+        "ImageIO direct network route: transfer=%s host=%s network=%s "
+        "TLS=%s TCP=%s:%s proxy_fallback=disabled",
+        transfer.id,
+        getattr(host, "name", host_id),
+        network_name,
+        tls_hostname,
+        target_ip,
+        port or 443,
+    )
+
+    return routed_url, tls_hostname, target_ip
+
+
+@contextmanager
+def temporary_dns_override(hostname, address):
+    if not hostname or not address:
+        yield
+        return
+
+    original = socket.getaddrinfo
+    expected = hostname.rstrip(".").lower()
+
+    def routed_getaddrinfo(host, *args, **kwargs):
+        value = host.decode() if isinstance(host, bytes) else str(host)
+        if value.rstrip(".").lower() == expected:
+            return original(address, *args, **kwargs)
+        return original(host, *args, **kwargs)
+
+    socket.getaddrinfo = routed_getaddrinfo
+    try:
+        yield
+    finally:
+        socket.getaddrinfo = original
 
 
 def local_name(value):
@@ -672,6 +809,10 @@ def upload_image(connection, path, disk_id, cp):
     )
 
     try:
+        transfer_url, dns_host, dns_ip = imageio_network_route(
+            connection, transfer, cp
+        )
+
         signature = inspect.signature(imageio_client.upload)
         kwargs = {
             "secure": cp.getboolean("config", "verify_tls", fallback=True),
@@ -681,7 +822,11 @@ def upload_image(connection, path, disk_id, cp):
             ),
         }
         if "proxy_url" in signature.parameters:
-            kwargs["proxy_url"] = getattr(transfer, "proxy_url", None)
+            kwargs["proxy_url"] = (
+                None
+                if dns_ip
+                else getattr(transfer, "proxy_url", None)
+            )
         if "progress" in signature.parameters:
             kwargs["progress"] = LogProgress(
                 disk_id,
@@ -700,16 +845,17 @@ def upload_image(connection, path, disk_id, cp):
             kwargs["disk_is_zero"] = False
 
         LOG.info("Uploading %s -> disk %s", path, disk_id)
-        imageio_client.upload(
-            str(path),
-            transfer.transfer_url,
-            cp.get(
-                "config",
-                "ca_file",
-                fallback="/etc/pki/ovirt-engine/ca.pem",
-            ),
-            **kwargs
-        )
+        with temporary_dns_override(dns_host, dns_ip):
+            imageio_client.upload(
+                str(path),
+                transfer_url,
+                cp.get(
+                    "config",
+                    "ca_file",
+                    fallback="/etc/pki/ovirt-engine/ca.pem",
+                ),
+                **kwargs
+            )
     except Exception:
         LOG.exception(
             "Upload failed for disk %s; cancelling ImageTransfer %s",
