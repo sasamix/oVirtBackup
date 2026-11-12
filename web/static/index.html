@@ -443,6 +443,17 @@ function renderChecks(result,target="settingsChecks"){
   ).join("")||'<div class="muted">No checks returned</div>';
 }
 
+function renderLockState(lock={},legacy=[]){
+  document.getElementById("lockState").textContent=legacy.length?
+    staticText("state.legacy","LEGACY"):
+    (lock.busy?staticText("state.busy","BUSY"):staticText("state.free","Free"));
+  document.getElementById("lockState").className="big "+((legacy.length||lock.busy)?"warn":"good");
+  document.getElementById("lockInfo").textContent=legacy.length?
+    ((uiLang==="ru"?"Активен legacy backup.py: ":"Legacy backup.py active: ")+legacy.map(x=>"pid="+x.pid).join(", ")) :
+    (lock.busy?(lock.holder||staticText("state.no_native_operation","Native operation")):
+      staticText("state.no_native_operation","No native operation"));
+}
+
 async function loadOverview(){
   const d=await api("api/overview");
   const consoleInfo=d.console||{};
@@ -462,13 +473,7 @@ async function loadOverview(){
   const b=d.last_backup;
   document.getElementById("lastBackup").textContent=b?(b.vm_name||"—"):(uiLang==="ru"?"Нет":"None");
   document.getElementById("lastBackupInfo").textContent=b?((b.directory||"")+" · "+localizedStatus(b.status||"")):staticText("state.no_manifests","No manifests");
-  const lock=d.lock||{};
-  const legacy=d.legacy_backup_processes||[];
-  document.getElementById("lockState").textContent=legacy.length?staticText("state.legacy","LEGACY"):(lock.busy?staticText("state.busy","BUSY"):staticText("state.free","Free"));
-  document.getElementById("lockState").className="big "+((legacy.length||lock.busy)?"warn":"good");
-  document.getElementById("lockInfo").textContent=legacy.length?
-    ((uiLang==="ru"?"Активен legacy backup.py: ":"Legacy backup.py active: ")+legacy.map(x=>"pid="+x.pid).join(", ")) :
-    (lock.holder||staticText("state.no_native_operation","No native operation"));
+  renderLockState(d.lock||{},d.legacy_backup_processes||[]);
   document.getElementById("timerState").textContent=localizedStatus(d.timer.ActiveState|| (uiLang==="ru"?"Недоступен":"Unavailable"));
   document.getElementById("timerInfo").textContent=d.timer.NextElapseUSecRealtime||(uiLang==="ru"?"timer не установлен/не включён":"timer not installed/enabled");
   document.getElementById("packages").innerHTML=Object.entries(d.packages).map(([k,v])=>kv(k,v||"not installed")).join("");
@@ -626,6 +631,7 @@ async function loadOperation(){
   try{
     const d=await api("api/operations/current");
     const op=d.operation;
+    renderLockState(d.lock||{},d.legacy_backup_processes||[]);
     const badge=document.getElementById("operationBadge");
     const meta=document.getElementById("operationMeta");
     const log=document.getElementById("operationLog");
