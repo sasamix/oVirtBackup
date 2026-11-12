@@ -1,5 +1,5 @@
 [Unit]
-Description=Daily oVirt Native VM Backup
+Description=Scheduled oVirt Native VM Backup
 
 [Timer]
 OnCalendar=*-*-* 02:00:00
