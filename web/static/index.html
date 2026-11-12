@@ -1,47 +1,466 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>oVirt Backup Console</title>
 <style>
-:root{color-scheme:dark;--bg:#0f131a;--panel:#171d27;--panel2:#1d2531;--line:#2b3645;--text:#e9eef5;--muted:#94a3b8;--good:#45c486;--warn:#f0b44d;--bad:#ef6b73;--accent:#6ea8fe;--shadow:0 14px 36px rgba(0,0,0,.23)}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}header{height:64px;display:flex;align-items:center;justify-content:space-between;padding:0 28px;border-bottom:1px solid var(--line);position:sticky;top:0;background:rgba(15,19,26,.96);z-index:2}.brand{font-weight:720;font-size:18px}.brand span{color:var(--accent)}.shell{display:grid;grid-template-columns:205px 1fr;min-height:calc(100vh - 64px)}nav{border-right:1px solid var(--line);padding:22px 12px}nav button{display:block;width:100%;padding:10px 14px;margin:2px 0;border:0;border-radius:8px;background:transparent;color:var(--muted);text-align:left;font:inherit;cursor:pointer}nav button.active,nav button:hover{background:var(--panel2);color:var(--text)}main{padding:26px;max-width:1500px;width:100%}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px;box-shadow:var(--shadow)}.card h3{margin:0 0 8px;font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}.big{font-size:24px;font-weight:700}.muted{color:var(--muted)}.good{color:var(--good)}.warn{color:var(--warn)}.bad{color:var(--bad)}.section{margin-top:18px}.section-title{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}th,td{padding:11px 12px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted)}tr:last-child td{border-bottom:0}.pill{display:inline-block;padding:3px 8px;border-radius:999px;background:var(--panel2)}button.action{border:1px solid var(--line);background:var(--panel2);color:var(--text);padding:7px 10px;border-radius:7px;cursor:pointer}pre{white-space:pre-wrap;word-break:break-word;margin:0;background:#0a0d12;border:1px solid var(--line);border-radius:10px;padding:14px;max-height:65vh;overflow:auto;font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace}.page{display:none}.page.active{display:block}.kv{display:grid;grid-template-columns:260px 1fr;border-bottom:1px solid var(--line);padding:8px 0}.row{display:flex;gap:8px;align-items:center}.right{margin-left:auto}dialog{background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:12px;padding:20px;max-width:420px;width:90%}input{width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;background:#0c1118;color:var(--text)}
-@media(max-width:950px){.shell{grid-template-columns:1fr}nav{display:flex;overflow:auto;border-right:0;border-bottom:1px solid var(--line)}nav button{width:auto;white-space:nowrap}.grid{grid-template-columns:repeat(2,1fr)}}@media(max-width:600px){main{padding:14px}.grid{grid-template-columns:1fr}.kv{grid-template-columns:1fr}}
-</style></head>
+:root{
+  color-scheme:dark;
+  --bg:#0f131a;--panel:#171d27;--panel2:#1d2531;--line:#2b3645;
+  --text:#e9eef5;--muted:#94a3b8;--good:#45c486;--warn:#f0b44d;
+  --bad:#ef6b73;--accent:#6ea8fe;--shadow:0 14px 36px rgba(0,0,0,.23)
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+header{height:64px;display:flex;align-items:center;justify-content:space-between;padding:0 28px;border-bottom:1px solid var(--line);position:sticky;top:0;background:rgba(15,19,26,.96);z-index:5}
+.brand{font-weight:720;font-size:18px}.brand span{color:var(--accent)}
+.shell{display:grid;grid-template-columns:205px 1fr;min-height:calc(100vh - 64px)}
+nav{border-right:1px solid var(--line);padding:22px 12px}
+nav button{display:block;width:100%;padding:10px 14px;margin:2px 0;border:0;border-radius:8px;background:transparent;color:var(--muted);text-align:left;font:inherit;cursor:pointer}
+nav button.active,nav button:hover{background:var(--panel2);color:var(--text)}
+main{padding:26px;max-width:1600px;width:100%}
+.grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:14px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px;box-shadow:var(--shadow)}
+.card h3{margin:0 0 8px;font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+.big{font-size:24px;font-weight:700}
+.muted{color:var(--muted)}.good{color:var(--good)}.warn{color:var(--warn)}.bad{color:var(--bad)}
+.section{margin-top:18px}.section-title{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:10px}
+.toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+th,td{padding:11px 12px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted)}
+tr:last-child td{border-bottom:0}
+.pill{display:inline-block;padding:3px 8px;border-radius:999px;background:var(--panel2)}
+button.action{border:1px solid var(--line);background:var(--panel2);color:var(--text);padding:8px 11px;border-radius:7px;cursor:pointer}
+button.action:hover{border-color:var(--accent)}
+button.primary{background:var(--accent);border-color:var(--accent);color:#08111f;font-weight:650}
+button.danger{border-color:var(--bad);color:var(--bad)}
+button:disabled{opacity:.45;cursor:not-allowed}
+pre{white-space:pre-wrap;word-break:break-word;margin:0;background:#0a0d12;border:1px solid var(--line);border-radius:10px;padding:14px;max-height:65vh;overflow:auto;font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace}
+.page{display:none}.page.active{display:block}
+.kv{display:grid;grid-template-columns:260px 1fr;border-bottom:1px solid var(--line);padding:8px 0}
+.row{display:flex;gap:8px;align-items:center}.right{margin-left:auto}
+dialog{background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:12px;padding:20px;max-width:960px;width:92%}
+input,textarea,select{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:8px;background:#0c1118;color:var(--text);font:inherit}
+textarea{min-height:92px;resize:vertical}
+input[type=checkbox]{width:auto;transform:scale(1.1)}
+.settings-group{margin:0 0 18px}
+.settings-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.field{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:13px}
+.field-label{display:flex;align-items:center;gap:8px;margin-bottom:7px;font-weight:600}
+.field small{display:block;color:var(--muted);margin-top:6px}
+.field .unit{color:var(--muted);font-weight:400}
+.check-row{display:flex;align-items:center;gap:9px;min-height:38px}
+.notice{padding:10px 12px;border-radius:8px;margin:10px 0;background:var(--panel2);border:1px solid var(--line)}
+.check-card{padding:10px 12px;border:1px solid var(--line);border-radius:8px;margin-bottom:8px;background:var(--panel)}
+.disk{margin-bottom:6px}.disk:last-child{margin-bottom:0}.storage{font-size:12px;color:var(--muted)}
+.code-id{font:12px ui-monospace,SFMono-Regular,Consolas,monospace;color:var(--muted)}
+.spinner{display:inline-block;width:12px;height:12px;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media(max-width:1100px){.grid{grid-template-columns:repeat(2,1fr)}.settings-grid{grid-template-columns:1fr}}
+@media(max-width:950px){.shell{grid-template-columns:1fr}nav{display:flex;overflow:auto;border-right:0;border-bottom:1px solid var(--line)}nav button{width:auto;white-space:nowrap}}
+@media(max-width:600px){main{padding:14px}.grid{grid-template-columns:1fr}.kv{grid-template-columns:1fr}}
+</style>
+</head>
 <body>
-<header><div class="brand"><span>oVirt</span> Backup Console</div><div class="row"><span id="engineBadge" class="pill muted">Engine …</span><button class="action" onclick="refreshAll()">Refresh</button></div></header>
-<div class="shell"><nav>
-<button class="active" data-page="dashboard">Dashboard</button><button data-page="vms">Virtual Machines</button><button data-page="backups">Backups</button><button data-page="logs">Logs</button><button data-page="health">Health</button><button data-page="settings">Settings</button>
-</nav><main>
-<section id="dashboard" class="page active"><div class="grid">
-<div class="card"><h3>Engine</h3><div id="engineState" class="big">…</div><div id="engineInfo" class="muted"></div></div>
-<div class="card"><h3>Repository free</h3><div id="repoFree" class="big">…</div><div id="repoPath" class="muted"></div></div>
-<div class="card"><h3>Last backup</h3><div id="lastBackup" class="big">…</div><div id="lastBackupInfo" class="muted"></div></div>
-<div class="card"><h3>Scheduler</h3><div id="timerState" class="big">…</div><div id="timerInfo" class="muted"></div></div>
-</div><div class="section"><div class="section-title"><h2>Recent backups</h2></div><table><thead><tr><th>VM</th><th>Created</th><th>Status</th><th>Disks</th><th>Actual</th><th>Backup ID</th></tr></thead><tbody id="recentBody"></tbody></table></div>
-<div class="section card"><h3>Installed stack</h3><div id="packages"></div></div></section>
-<section id="vms" class="page"><div class="section-title"><h2>Virtual Machines</h2><span class="muted">Read-only from Engine API</span></div><table><thead><tr><th>Name</th><th>Status</th><th>vCPU</th><th>Memory</th><th>ID</th></tr></thead><tbody id="vmsBody"></tbody></table></section>
-<section id="backups" class="page"><div class="section-title"><h2>Backup repository</h2><span class="muted">manifest.json is the source of truth</span></div><table><thead><tr><th>VM</th><th>Directory</th><th>Status</th><th>Type</th><th>Disks</th><th>Actual</th><th>Checkpoint</th></tr></thead><tbody id="backupsBody"></tbody></table></section>
-<section id="logs" class="page"><div class="section-title"><h2>Native backup log</h2><button class="action" onclick="loadLogs()">Reload</button></div><div id="logPath" class="muted" style="margin-bottom:8px"></div><pre id="logBox">Loading…</pre></section>
-<section id="health" class="page"><div class="section-title"><h2>Health</h2></div><div id="healthList"></div></section>
-<section id="settings" class="page"><div class="section-title"><h2>Settings</h2><span class="pill warn">Read-only in 0.1</span></div><div class="card" id="settingsList"></div></section>
-</main></div>
-<dialog id="tokenDialog"><h2>Console token</h2><p class="muted">Enter the token from /etc/ovirt-backup/web.token. It is kept only in this browser session.</p><input id="tokenInput" type="password" autocomplete="off"><div class="row" style="margin-top:12px"><button class="action right" onclick="saveToken()">Connect</button></div></dialog>
+<header>
+  <div class="brand"><span>oVirt</span> Backup Console</div>
+  <div class="row">
+    <span id="engineBadge" class="pill muted">Engine …</span>
+    <button class="action" onclick="refreshAll()">Refresh</button>
+  </div>
+</header>
+<div class="shell">
+<nav>
+  <button class="active" data-page="dashboard">Dashboard</button>
+  <button data-page="vms">Virtual Machines</button>
+  <button data-page="backups">Backups</button>
+  <button data-page="logs">Logs</button>
+  <button data-page="health">Health</button>
+  <button data-page="settings">Settings</button>
+</nav>
+<main>
+<section id="dashboard" class="page active">
+  <div class="grid">
+    <div class="card"><h3>Engine</h3><div id="engineState" class="big">…</div><div id="engineInfo" class="muted"></div></div>
+    <div class="card"><h3>Repository free</h3><div id="repoFree" class="big">…</div><div id="repoPath" class="muted"></div></div>
+    <div class="card"><h3>Last backup</h3><div id="lastBackup" class="big">…</div><div id="lastBackupInfo" class="muted"></div></div>
+    <div class="card"><h3>Native lock</h3><div id="lockState" class="big">…</div><div id="lockInfo" class="muted"></div></div>
+    <div class="card"><h3>Scheduler</h3><div id="timerState" class="big">…</div><div id="timerInfo" class="muted"></div></div>
+  </div>
+  <div class="section">
+    <div class="section-title"><h2>Recent backups</h2></div>
+    <table><thead><tr><th>VM</th><th>Created</th><th>Status</th><th>Disks</th><th>Actual</th><th>Backup ID</th></tr></thead><tbody id="recentBody"></tbody></table>
+  </div>
+  <div class="section card"><h3>Installed stack</h3><div id="packages"></div></div>
+</section>
+
+<section id="vms" class="page">
+  <div class="section-title">
+    <div><h2 style="margin:0">Virtual Machines</h2><span class="muted">Engine inventory with disk/storage mapping</span></div>
+    <div class="toolbar">
+      <button class="action" onclick="selectAllVms(true)">Select all</button>
+      <button class="action" onclick="selectAllVms(false)">Clear</button>
+      <button class="action" onclick="useSelectedForConfig()">Use in Settings</button>
+      <button class="action primary" onclick="dryRunSelected()">Dry-run selected</button>
+    </div>
+  </div>
+  <table>
+    <thead><tr><th></th><th>Name</th><th>Status</th><th>vCPU</th><th>Memory</th><th>Disks / storage</th></tr></thead>
+    <tbody id="vmsBody"></tbody>
+  </table>
+</section>
+
+<section id="backups" class="page">
+  <div class="section-title"><h2>Backup repository</h2><span class="muted">manifest.json is the source of truth</span></div>
+  <table><thead><tr><th>VM</th><th>Directory</th><th>Status</th><th>Type</th><th>Disks</th><th>Actual</th><th>Checkpoint</th></tr></thead><tbody id="backupsBody"></tbody></table>
+</section>
+
+<section id="logs" class="page">
+  <div class="section-title">
+    <div><h2 id="logsTitle" style="margin:0">Native backup log</h2><div id="logPath" class="muted"></div></div>
+    <div class="toolbar">
+      <button class="action" onclick="loadLogs('backup')">Backup</button>
+      <button class="action" onclick="loadLogs('restore')">Restore</button>
+      <button class="action" onclick="loadLogs(currentLogKind)">Reload</button>
+    </div>
+  </div>
+  <pre id="logBox">Loading…</pre>
+</section>
+
+<section id="health" class="page">
+  <div class="section-title"><h2>Health</h2></div>
+  <div id="healthList"></div>
+</section>
+
+<section id="settings" class="page">
+  <div class="section-title">
+    <div>
+      <h2 style="margin:0">Native configuration</h2>
+      <div id="configPath" class="muted"></div>
+    </div>
+    <div class="toolbar">
+      <span class="pill good">Validated write mode</span>
+      <button class="action" onclick="loadSettings()">Reload</button>
+      <button class="action" onclick="validateSettings()">Validate</button>
+      <button class="action primary" onclick="saveSettings()">Save</button>
+    </div>
+  </div>
+  <div id="settingsNotice"></div>
+  <div id="settingsForm"></div>
+  <div class="section">
+    <div class="section-title"><h2>Configuration checks</h2></div>
+    <div id="settingsChecks" class="muted">Press Validate to test Engine, repository, network and restore defaults.</div>
+  </div>
+  <div id="unknownSettings" class="section"></div>
+</section>
+</main>
+</div>
+
+<dialog id="tokenDialog">
+  <h2>Console token</h2>
+  <p class="muted">Enter the token from /etc/ovirt-backup/web.token. It is kept only in this browser session.</p>
+  <input id="tokenInput" type="password" autocomplete="off">
+  <div class="row" style="margin-top:12px"><button class="action primary right" onclick="saveToken()">Connect</button></div>
+</dialog>
+
+<dialog id="outputDialog">
+  <div class="section-title"><h2 id="outputTitle" style="margin:0">Output</h2><button class="action" onclick="document.getElementById('outputDialog').close()">Close</button></div>
+  <pre id="outputBox"></pre>
+</dialog>
+
 <script>
 let token=sessionStorage.getItem("ovirtBackupToken")||"";
-const fmtBytes=n=>{if(n===null||n===undefined)return "—";const u=["B","KiB","MiB","GiB","TiB"];let i=0,v=Number(n);while(v>=1024&&i<u.length-1){v/=1024;i++}return v.toFixed(i<2?0:2)+" "+u[i]};
+let settingsData=null;
+let currentLogKind="backup";
+let currentVms=[];
+
+const fmtBytes=n=>{
+  if(n===null||n===undefined)return "—";
+  const u=["B","KiB","MiB","GiB","TiB"];let i=0,v=Number(n);
+  while(v>=1024&&i<u.length-1){v/=1024;i++}
+  return v.toFixed(i<2?0:2)+" "+u[i]
+};
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
-async function api(path){const h={};if(token)h.Authorization="Bearer "+token;const r=await fetch(path,{headers:h});if(r.status===401){document.getElementById("tokenDialog").showModal();throw new Error("Unauthorized")}const j=await r.json();if(!r.ok)throw new Error(j.error||r.statusText);return j}
-function saveToken(){token=document.getElementById("tokenInput").value.trim();sessionStorage.setItem("ovirtBackupToken",token);document.getElementById("tokenDialog").close();refreshAll()}
+function statusClass(s){
+  s=String(s||"").toLowerCase();
+  if(s==="complete"||s==="up"||s==="active")return "good";
+  if(s.includes("fail")||s.includes("error"))return "bad";
+  if(s.includes("locked")||s.includes("wait"))return "warn";
+  return "muted";
+}
+async function api(path,options={}){
+  const h=Object.assign({},options.headers||{});
+  if(token)h.Authorization="Bearer "+token;
+  const r=await fetch(path,Object.assign({},options,{headers:h}));
+  if(r.status===401){
+    document.getElementById("tokenDialog").showModal();
+    throw new Error("Unauthorized");
+  }
+  let j={};
+  try{j=await r.json()}catch(_e){}
+  if(!r.ok){
+    const e=new Error(j.error||r.statusText);
+    e.data=j;
+    throw e;
+  }
+  return j;
+}
+async function post(path,data){
+  return api(path,{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify(data)
+  });
+}
+function saveToken(){
+  token=document.getElementById("tokenInput").value.trim();
+  sessionStorage.setItem("ovirtBackupToken",token);
+  document.getElementById("tokenDialog").close();
+  refreshAll();
+}
 function kv(k,v){return '<div class="kv"><div class="muted">'+esc(k)+'</div><div>'+esc(v)+'</div></div>'}
-function statusClass(s){s=String(s||"").toLowerCase();return s==="complete"||s==="up"||s==="active"?"good":s.includes("fail")||s==="down"?"bad":"warn"}
-async function loadOverview(){const d=await api("api/overview");document.getElementById("engineState").textContent=d.engine.ok?"Connected":"Error";document.getElementById("engineState").className="big "+(d.engine.ok?"good":"bad");document.getElementById("engineBadge").textContent=d.engine.ok?"Engine connected":"Engine error";document.getElementById("engineBadge").className="pill "+(d.engine.ok?"good":"bad");document.getElementById("engineInfo").textContent=(d.engine.api_version||"API version unknown")+" · "+(d.engine.latency_ms||0)+" ms";document.getElementById("repoFree").textContent=fmtBytes(d.repository.free_bytes);document.getElementById("repoPath").textContent=d.repository.path||"Not configured";const b=d.last_backup;document.getElementById("lastBackup").textContent=b?(b.vm_name||"—"):"None";document.getElementById("lastBackupInfo").textContent=b?((b.directory||"")+" · "+(b.status||"")):"No manifests";document.getElementById("timerState").textContent=d.timer.ActiveState||"Unavailable";document.getElementById("timerInfo").textContent=d.timer.NextElapseUSecRealtime||"timer not installed";document.getElementById("packages").innerHTML=Object.entries(d.packages).map(([k,v])=>kv(k,v||"not installed")).join("")}
-async function loadBackups(){const d=await api("api/backups?limit=250");document.getElementById("backupsBody").innerHTML=d.backups.map(b=>'<tr><td>'+esc(b.vm_name)+'</td><td>'+esc(b.directory)+'</td><td class="'+statusClass(b.status)+'">'+esc(b.status)+'</td><td>'+esc(b.type)+'</td><td>'+esc(b.disk_count)+'</td><td>'+fmtBytes(b.actual_size)+'</td><td>'+esc(b.checkpoint_id||"—")+'</td></tr>').join("")||'<tr><td colspan="7" class="muted">No native backup manifests yet</td></tr>';document.getElementById("recentBody").innerHTML=d.backups.slice(0,10).map(b=>'<tr><td>'+esc(b.vm_name)+'</td><td>'+esc(b.directory)+'</td><td class="'+statusClass(b.status)+'">'+esc(b.status)+'</td><td>'+esc(b.disk_count)+'</td><td>'+fmtBytes(b.actual_size)+'</td><td>'+esc(b.backup_id||"—")+'</td></tr>').join("")||'<tr><td colspan="6" class="muted">No native backups yet</td></tr>'}
-async function loadVms(){const d=await api("api/vms");document.getElementById("vmsBody").innerHTML=d.vms.map(v=>'<tr><td>'+esc(v.name)+'</td><td class="'+statusClass(v.status)+'">'+esc(v.status)+'</td><td>'+esc(v.cpu_cores||"—")+'</td><td>'+fmtBytes(v.memory)+'</td><td class="muted">'+esc(v.id)+'</td></tr>').join("")}
-async function loadLogs(){const d=await api("api/logs?lines=600");document.getElementById("logPath").textContent=d.path||"Log not configured";const box=document.getElementById("logBox");box.textContent=d.lines.join("\n")||"No log entries";box.scrollTop=box.scrollHeight}
-async function loadHealth(){const d=await api("api/health");document.getElementById("healthList").innerHTML=d.checks.map(c=>'<div class="card" style="margin-bottom:10px"><div class="row"><strong>'+esc(c.name)+'</strong><span class="right '+(c.ok?"good":"bad")+'">'+(c.ok?"✓ OK":"✕ FAIL")+'</span></div><div class="muted" style="margin-top:5px">'+esc(c.detail||"")+'</div></div>').join("")}
-async function loadSettings(){const d=await api("api/settings");document.getElementById("settingsList").innerHTML=Object.entries(d.settings).sort().map(([k,v])=>kv(k,v)).join("")}
-async function refreshAll(){for(const fn of [loadOverview,loadBackups,loadVms,loadLogs,loadHealth,loadSettings]){try{await fn()}catch(e){console.warn(e)}}}
-document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{document.querySelectorAll("nav button").forEach(x=>x.classList.remove("active"));document.querySelectorAll(".page").forEach(x=>x.classList.remove("active"));b.classList.add("active");document.getElementById(b.dataset.page).classList.add("active")});
-refreshAll();setInterval(()=>{loadOverview().catch(()=>{});loadBackups().catch(()=>{})},30000);
-</script></body></html>
+function showPage(id){
+  document.querySelectorAll("nav button").forEach(x=>x.classList.toggle("active",x.dataset.page===id));
+  document.querySelectorAll(".page").forEach(x=>x.classList.toggle("active",x.id===id));
+}
+function setNotice(text,kind="muted"){
+  const box=document.getElementById("settingsNotice");
+  box.innerHTML=text?'<div class="notice '+kind+'">'+esc(text)+'</div>':"";
+}
+function renderChecks(result,target="settingsChecks"){
+  const el=document.getElementById(target);
+  const checks=result?.checks||[];
+  el.innerHTML=checks.map(c=>
+    '<div class="check-card"><div class="row"><strong>'+esc(c.name)+'</strong>'+
+    '<span class="right '+(c.ok?"good":"bad")+'">'+(c.ok?"✓ OK":"✕ FAIL")+'</span></div>'+
+    '<div class="muted">'+esc(c.detail||"")+'</div></div>'
+  ).join("")||'<div class="muted">No checks returned</div>';
+}
+
+async function loadOverview(){
+  const d=await api("api/overview");
+  document.getElementById("engineState").textContent=d.engine.ok?"Connected":"Error";
+  document.getElementById("engineState").className="big "+(d.engine.ok?"good":"bad");
+  document.getElementById("engineBadge").textContent=d.engine.ok?"Engine connected":"Engine error";
+  document.getElementById("engineBadge").className="pill "+(d.engine.ok?"good":"bad");
+  document.getElementById("engineInfo").textContent=(d.engine.api_version||"API version unknown")+" · "+(d.engine.latency_ms||0)+" ms";
+  document.getElementById("repoFree").textContent=fmtBytes(d.repository.free_bytes);
+  document.getElementById("repoPath").textContent=d.repository.path||"Not configured";
+  const b=d.last_backup;
+  document.getElementById("lastBackup").textContent=b?(b.vm_name||"—"):"None";
+  document.getElementById("lastBackupInfo").textContent=b?((b.directory||"")+" · "+(b.status||"")):"No manifests";
+  const lock=d.lock||{};
+  document.getElementById("lockState").textContent=lock.busy?"BUSY":"Free";
+  document.getElementById("lockState").className="big "+(lock.busy?"warn":"good");
+  document.getElementById("lockInfo").textContent=lock.holder||"No native operation";
+  document.getElementById("timerState").textContent=d.timer.ActiveState||"Unavailable";
+  document.getElementById("timerInfo").textContent=d.timer.NextElapseUSecRealtime||"timer not installed/enabled";
+  document.getElementById("packages").innerHTML=Object.entries(d.packages).map(([k,v])=>kv(k,v||"not installed")).join("");
+}
+async function loadBackups(){
+  const d=await api("api/backups?limit=250");
+  document.getElementById("backupsBody").innerHTML=d.backups.map(b=>
+    '<tr><td>'+esc(b.vm_name)+'</td><td>'+esc(b.directory)+'</td>'+
+    '<td class="'+statusClass(b.status)+'">'+esc(b.status)+'</td><td>'+esc(b.type)+'</td>'+
+    '<td>'+esc(b.disk_count)+'</td><td>'+fmtBytes(b.actual_size)+'</td><td>'+esc(b.checkpoint_id||"—")+'</td></tr>'
+  ).join("")||'<tr><td colspan="7" class="muted">No native backup manifests yet</td></tr>';
+  document.getElementById("recentBody").innerHTML=d.backups.slice(0,10).map(b=>
+    '<tr><td>'+esc(b.vm_name)+'</td><td>'+esc(b.directory)+'</td>'+
+    '<td class="'+statusClass(b.status)+'">'+esc(b.status)+'</td><td>'+esc(b.disk_count)+'</td>'+
+    '<td>'+fmtBytes(b.actual_size)+'</td><td>'+esc(b.backup_id||"—")+'</td></tr>'
+  ).join("")||'<tr><td colspan="6" class="muted">No native backups yet</td></tr>';
+}
+async function loadVms(){
+  const body=document.getElementById("vmsBody");
+  body.innerHTML='<tr><td colspan="6"><span class="spinner"></span> Loading Engine disk inventory…</td></tr>';
+  const d=await api("api/vms?details=1");
+  currentVms=d.vms||[];
+  body.innerHTML=currentVms.map(v=>{
+    const disks=(v.disks||[]).map(d=>{
+      const stores=(d.storage_domains||[]).map(s=>esc(s.name||s.id)+(s.address?' · '+esc(s.address):'')).join("<br>")||"storage unknown";
+      return '<div class="disk"><strong>'+esc(d.alias||d.id)+'</strong> · '+fmtBytes(d.provisioned_size)+
+        (d.bootable?' · bootable':'')+'<div class="storage">'+stores+'</div></div>';
+    }).join("")||(v.disk_error?'<span class="bad">'+esc(v.disk_error)+'</span>':'—');
+    return '<tr><td><input class="vm-select" type="checkbox" value="'+esc(v.name)+'"></td>'+
+      '<td><strong>'+esc(v.name)+'</strong><div class="code-id">'+esc(v.id)+'</div></td>'+
+      '<td class="'+statusClass(v.status)+'">'+esc(v.status)+'</td><td>'+esc(v.cpu_cores||"—")+'</td>'+
+      '<td>'+fmtBytes(v.memory)+'</td><td>'+disks+'</td></tr>';
+  }).join("")||'<tr><td colspan="6" class="muted">No VMs</td></tr>';
+}
+function selectedVmNames(){
+  return [...document.querySelectorAll(".vm-select:checked")].map(x=>x.value);
+}
+function selectAllVms(value){
+  document.querySelectorAll(".vm-select").forEach(x=>x.checked=value);
+}
+async function dryRunSelected(){
+  const names=selectedVmNames();
+  if(!names.length){alert("Select at least one VM.");return}
+  const dlg=document.getElementById("outputDialog");
+  document.getElementById("outputTitle").textContent="Native dry-run";
+  document.getElementById("outputBox").textContent="Running dry-run for: "+names.join(", ")+"\n";
+  dlg.showModal();
+  try{
+    const d=await post("api/actions/dry-run",{vm_names:names});
+    document.getElementById("outputBox").textContent=d.output||"(no output)";
+  }catch(e){
+    document.getElementById("outputBox").textContent="ERROR: "+e.message+"\n"+JSON.stringify(e.data||{},null,2);
+  }
+}
+function useSelectedForConfig(){
+  const names=selectedVmNames();
+  if(!names.length){alert("Select at least one VM.");return}
+  if(!settingsData){alert("Open Settings once so the form is loaded.");return}
+  showPage("settings");
+  const list=document.querySelector('[data-setting="vm_names"]');
+  const skip=document.querySelector('[data-setting="vm_names_skip"]');
+  const tag=document.querySelector('[data-setting="vm_tag"]');
+  const all=document.querySelector('[data-setting="all_vms"]');
+  if(list)list.value=names.join("\n");
+  if(skip)skip.value="";
+  if(tag)tag.value="";
+  if(all)all.checked=false;
+  setNotice("Selected VM list copied into the form. Press Validate, then Save.","warn");
+}
+
+async function loadLogs(kind=currentLogKind){
+  currentLogKind=kind;
+  const d=await api("api/logs?kind="+encodeURIComponent(kind)+"&lines=600");
+  document.getElementById("logsTitle").textContent=kind==="restore"?"Native restore log":"Native backup log";
+  document.getElementById("logPath").textContent=d.path||"Log not configured";
+  const box=document.getElementById("logBox");
+  box.textContent=d.lines.join("\n")||"No log entries";
+  box.scrollTop=box.scrollHeight;
+}
+async function loadHealth(){
+  const d=await api("api/health");
+  renderChecks(d,"healthList");
+}
+
+function inputForSetting(spec,value,secretSet){
+  const key=spec.key;
+  const id="setting-"+key;
+  if(spec.type==="bool"){
+    return '<div class="check-row"><input id="'+id+'" data-setting="'+esc(key)+'" data-type="bool" type="checkbox" '+(value?"checked":"")+'>'+
+      '<label for="'+id+'">'+(value?"Enabled":"Disabled")+'</label></div>';
+  }
+  if(spec.type==="list"){
+    return '<textarea id="'+id+'" data-setting="'+esc(key)+'" data-type="list" placeholder="One item per line">'+esc((value||[]).join("\n"))+'</textarea>';
+  }
+  if(spec.type==="choice"){
+    return '<select id="'+id+'" data-setting="'+esc(key)+'" data-type="choice">'+
+      (spec.choices||[]).map(x=>'<option value="'+esc(x)+'" '+(String(value)===String(x)?"selected":"")+'>'+esc(x)+'</option>').join("")+
+      '</select>';
+  }
+  const type=spec.type==="secret"?"password":((spec.type==="int"||spec.type==="optional_int"||spec.type==="float")?"number":"text");
+  const attrs=[];
+  if(spec.min!==undefined)attrs.push('min="'+esc(spec.min)+'"');
+  if(spec.max!==undefined)attrs.push('max="'+esc(spec.max)+'"');
+  if(spec.step!==undefined)attrs.push('step="'+esc(spec.step)+'"');
+  else if(spec.type==="float")attrs.push('step="any"');
+  const placeholder=spec.type==="secret"?(secretSet?"Stored; leave blank to keep":"Enter password"):"";
+  const shown=spec.type==="secret"?"":(value??"");
+  return '<input id="'+id+'" data-setting="'+esc(key)+'" data-type="'+esc(spec.type)+'" type="'+type+'" value="'+esc(shown)+'" placeholder="'+esc(placeholder)+'" '+attrs.join(" ")+'>';
+}
+function renderSettings(data){
+  settingsData=data;
+  document.getElementById("configPath").textContent=data.config_path||"";
+  const groups={};
+  (data.schema||[]).forEach(spec=>{
+    (groups[spec.group]??=[]).push(spec);
+  });
+  document.getElementById("settingsForm").innerHTML=Object.entries(groups).map(([group,specs])=>
+    '<div class="settings-group"><h2>'+esc(group)+'</h2><div class="settings-grid">'+
+    specs.map(spec=>{
+      const value=data.values?.[spec.key];
+      const unit=spec.unit?' <span class="unit">('+esc(spec.unit)+')</span>':'';
+      const advanced=spec.advanced?' <span class="pill muted">advanced</span>':'';
+      return '<div class="field"><div class="field-label">'+esc(spec.label||spec.key)+unit+advanced+'</div>'+
+        inputForSetting(spec,value,data.secret_set?.[spec.key])+
+        (spec.description?'<small>'+esc(spec.description)+'</small>':'')+'</div>';
+    }).join("")+'</div></div>'
+  ).join("");
+  const unknown=data.unknown||{};
+  document.getElementById("unknownSettings").innerHTML=Object.keys(unknown).length?
+    '<div class="card"><h3>Unmanaged existing settings</h3>'+
+    Object.entries(unknown).map(([k,v])=>kv(k,v)).join("")+'</div>':"";
+}
+async function loadSettings(){
+  try{
+    const d=await api("api/settings");
+    renderSettings(d);
+    setNotice("");
+  }catch(e){
+    setNotice("Cannot load settings: "+e.message,"bad");
+  }
+}
+function collectSettings(){
+  const out={};
+  document.querySelectorAll("[data-setting]").forEach(el=>{
+    const key=el.dataset.setting;
+    const type=el.dataset.type;
+    if(type==="bool")out[key]=el.checked;
+    else if(type==="list")out[key]=el.value.split(/[\r\n]+/).map(x=>x.trim()).filter(Boolean);
+    else out[key]=el.value;
+  });
+  return out;
+}
+function renderValidationError(e){
+  const errors=e.data?.errors||{};
+  const detail=Object.keys(errors).length?
+    Object.entries(errors).map(([k,v])=>k+": "+v).join("; "):e.message;
+  setNotice(detail,"bad");
+}
+async function validateSettings(){
+  if(!settingsData){await loadSettings()}
+  setNotice("Validating configuration…","warn");
+  try{
+    const d=await post("api/settings/validate",{settings:collectSettings()});
+    renderChecks(d);
+    setNotice(d.ok?"Configuration validation passed.":"Validation completed with failed checks.",d.ok?"good":"warn");
+    return d;
+  }catch(e){
+    renderValidationError(e);
+    document.getElementById("settingsChecks").innerHTML="";
+    return null;
+  }
+}
+async function saveSettings(){
+  if(!settingsData){await loadSettings()}
+  const validation=await validateSettings();
+  if(!validation||!validation.ok){
+    if(!confirm("Some runtime checks failed. Save the structurally valid configuration anyway?"))return;
+  }
+  if(!confirm("Save native backup configuration? The previous file will be backed up first."))return;
+  setNotice("Saving configuration…","warn");
+  try{
+    const d=await post("api/settings",{settings:collectSettings()});
+    renderSettings(d.settings);
+    renderChecks(d.checks);
+    setNotice("Configuration saved atomically."+(d.backup?" Previous version: "+d.backup:""),"good");
+    await loadOverview();
+  }catch(e){
+    renderValidationError(e);
+  }
+}
+
+async function refreshAll(){
+  for(const fn of [loadOverview,loadBackups,loadVms,()=>loadLogs(currentLogKind),loadHealth,loadSettings]){
+    try{await fn()}catch(e){console.warn(e)}
+  }
+}
+document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{
+  showPage(b.dataset.page);
+  if(b.dataset.page==="vms")loadVms().catch(console.warn);
+  if(b.dataset.page==="settings")loadSettings().catch(console.warn);
+});
+refreshAll();
+setInterval(()=>{
+  loadOverview().catch(()=>{});
+  loadBackups().catch(()=>{});
+},30000);
+</script>
+</body>
+</html>
