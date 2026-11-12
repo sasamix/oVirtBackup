@@ -12,8 +12,8 @@
   --bad:#ef6b73;--accent:#6ea8fe;--shadow:0 14px 36px rgba(0,0,0,.23)
 }
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
-header{height:64px;display:flex;align-items:center;justify-content:space-between;padding:0 28px;border-bottom:1px solid var(--line);position:sticky;top:0;background:rgba(15,19,26,.96);z-index:5}
+body{margin:0;padding-top:64px;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+header{height:64px;display:flex;align-items:center;justify-content:space-between;padding:0 28px;border-bottom:1px solid var(--line);position:fixed;top:0;left:0;right:0;background:rgba(15,19,26,.96);backdrop-filter:blur(10px);z-index:20}
 .brand{font-weight:720;font-size:18px}.brand span{color:var(--accent)}
 .shell{display:grid;grid-template-columns:205px 1fr;min-height:calc(100vh - 64px)}
 nav{border-right:1px solid var(--line);padding:22px 12px}
@@ -65,53 +65,53 @@ input[type=checkbox]{width:auto;transform:scale(1.1)}
 </head>
 <body>
 <header>
-  <div class="brand"><span>oVirt</span> Backup Console</div>
+  <div class="brand"><span>oVirt</span> <span data-i18n="brand.console">Backup Console</span></div>
   <div class="row">
     <span id="engineBadge" class="pill muted">Engine …</span>
-    <button class="action" onclick="refreshAll()">Refresh</button>
+    <button class="action" onclick="refreshAll()" data-i18n="action.refresh">Refresh</button>
   </div>
 </header>
 <div class="shell">
 <nav>
-  <button class="active" data-page="dashboard">Dashboard</button>
-  <button data-page="vms">Virtual Machines</button>
-  <button data-page="backups">Backups</button>
-  <button data-page="logs">Logs</button>
-  <button data-page="health">Health</button>
-  <button data-page="settings">Settings</button>
+  <button class="active" data-page="dashboard" data-i18n="nav.dashboard">Dashboard</button>
+  <button data-page="vms" data-i18n="nav.vms">Virtual Machines</button>
+  <button data-page="backups" data-i18n="nav.backups">Backups</button>
+  <button data-page="logs" data-i18n="nav.logs">Logs</button>
+  <button data-page="health" data-i18n="nav.health">Health</button>
+  <button data-page="settings" data-i18n="nav.settings">Settings</button>
 </nav>
 <main>
 <section id="dashboard" class="page active">
   <div class="grid">
-    <div class="card"><h3>Engine</h3><div id="engineState" class="big">…</div><div id="engineInfo" class="muted"></div></div>
-    <div class="card"><h3>Repository free</h3><div id="repoFree" class="big">…</div><div id="repoPath" class="muted"></div></div>
-    <div class="card"><h3>Last backup</h3><div id="lastBackup" class="big">…</div><div id="lastBackupInfo" class="muted"></div></div>
-    <div class="card"><h3>Native lock</h3><div id="lockState" class="big">…</div><div id="lockInfo" class="muted"></div></div>
-    <div class="card"><h3>Scheduler</h3><div id="timerState" class="big">…</div><div id="timerInfo" class="muted"></div></div>
+    <div class="card"><h3 data-i18n="dashboard.engine">Engine</h3><div id="engineState" class="big">…</div><div id="engineInfo" class="muted"></div></div>
+    <div class="card"><h3 data-i18n="dashboard.repo_free">Repository free</h3><div id="repoFree" class="big">…</div><div id="repoPath" class="muted"></div></div>
+    <div class="card"><h3 data-i18n="dashboard.last_backup">Last backup</h3><div id="lastBackup" class="big">…</div><div id="lastBackupInfo" class="muted"></div></div>
+    <div class="card"><h3 data-i18n="dashboard.native_lock">Native lock</h3><div id="lockState" class="big">…</div><div id="lockInfo" class="muted"></div></div>
+    <div class="card"><h3 data-i18n="dashboard.scheduler">Scheduler</h3><div id="timerState" class="big">…</div><div id="timerInfo" class="muted"></div></div>
   </div>
   <div class="section card">
     <div class="section-title">
-      <div><h2 style="margin:0">Manual operation</h2><div id="operationMeta" class="muted">No console operation</div></div>
-      <span id="operationBadge" class="pill muted">Idle</span>
+      <div><h2 style="margin:0" data-i18n="dashboard.manual_operation">Manual operation</h2><div id="operationMeta" class="muted" data-i18n="state.no_console_operation">No console operation</div></div>
+      <span id="operationBadge" class="pill muted" data-i18n="state.idle">Idle</span>
     </div>
-    <pre id="operationLog" style="max-height:260px">No operation log.</pre>
+    <pre id="operationLog" style="max-height:260px" data-i18n="state.no_operation_log">No operation log.</pre>
   </div>
   <div class="section">
-    <div class="section-title"><h2>Recent backups</h2></div>
+    <div class="section-title"><h2 data-i18n="dashboard.recent_backups">Recent backups</h2></div>
     <table><thead><tr><th>VM</th><th>Created</th><th>Status</th><th>Disks</th><th>Actual</th><th>Backup ID</th></tr></thead><tbody id="recentBody"></tbody></table>
   </div>
-  <div class="section card"><h3>Installed stack</h3><div id="packages"></div></div>
+  <div class="section card"><h3 data-i18n="dashboard.installed_stack">Installed stack</h3><div id="packages"></div></div>
 </section>
 
 <section id="vms" class="page">
   <div class="section-title">
-    <div><h2 style="margin:0">Virtual Machines</h2><span class="muted">Engine inventory with disk/storage mapping</span></div>
+    <div><h2 style="margin:0" data-i18n="vms.title">Virtual Machines</h2><span class="muted" data-i18n="vms.subtitle">Engine inventory with disk/storage mapping</span></div>
     <div class="toolbar">
-      <button class="action" onclick="selectAllVms(true)">Select all</button>
-      <button class="action" onclick="selectAllVms(false)">Clear</button>
-      <button class="action" onclick="useSelectedForConfig()">Use in Settings</button>
-      <button class="action" onclick="dryRunSelected()">Dry-run selected</button>
-      <button class="action primary" onclick="backupSelected()">Backup selected</button>
+      <button class="action" onclick="selectAllVms(true)" data-i18n="action.select_all">Select all</button>
+      <button class="action" onclick="selectAllVms(false)" data-i18n="action.clear">Clear</button>
+      <button class="action" onclick="useSelectedForConfig()" data-i18n="action.use_settings">Use in Settings</button>
+      <button class="action" onclick="dryRunSelected()" data-i18n="action.dry_run_selected">Dry-run selected</button>
+      <button class="action primary" onclick="backupSelected()" data-i18n="action.backup_selected">Backup selected</button>
     </div>
   </div>
   <table>
@@ -121,7 +121,7 @@ input[type=checkbox]{width:auto;transform:scale(1.1)}
 </section>
 
 <section id="backups" class="page">
-  <div class="section-title"><h2>Backup repository</h2><span class="muted">manifest.json is the source of truth</span></div>
+  <div class="section-title"><h2 data-i18n="backups.title">Backup repository</h2><span class="muted" data-i18n="backups.subtitle">manifest.json is the source of truth</span></div>
   <table><thead><tr><th>VM</th><th>Directory</th><th>Status</th><th>Type</th><th>Disks</th><th>Actual</th><th>Checkpoint</th><th></th></tr></thead><tbody id="backupsBody"></tbody></table>
 </section>
 
@@ -129,38 +129,38 @@ input[type=checkbox]{width:auto;transform:scale(1.1)}
   <div class="section-title">
     <div><h2 id="logsTitle" style="margin:0">Native backup log</h2><div id="logPath" class="muted"></div></div>
     <div class="toolbar">
-      <button class="action" onclick="loadLogs('backup')">Backup</button>
-      <button class="action" onclick="loadLogs('restore')">Restore</button>
-      <button class="action" onclick="loadLogs(currentLogKind)">Reload</button>
+      <button class="action" onclick="loadLogs('backup')" data-i18n="action.backup">Backup</button>
+      <button class="action" onclick="loadLogs('restore')" data-i18n="action.restore">Restore</button>
+      <button class="action" onclick="loadLogs(currentLogKind)" data-i18n="action.reload">Reload</button>
     </div>
   </div>
   <pre id="logBox">Loading…</pre>
 </section>
 
 <section id="health" class="page">
-  <div class="section-title"><h2>Health</h2></div>
+  <div class="section-title"><h2 data-i18n="health.title">Health</h2></div>
   <div id="healthList"></div>
 </section>
 
 <section id="settings" class="page">
   <div class="section-title">
     <div>
-      <h2 style="margin:0">Native configuration</h2>
+      <h2 style="margin:0" data-i18n="settings.title">Native configuration</h2>
       <div id="configPath" class="muted"></div>
     </div>
     <div class="toolbar">
-      <span class="pill good">Validated write mode</span>
-      <button class="action" onclick="loadSettings()">Reload</button>
-      <button class="action" onclick="previewRetention()">Retention preview</button>
-      <button class="action" onclick="validateSettings()">Validate</button>
-      <button class="action primary" onclick="saveSettings()">Save</button>
+      <span class="pill good" data-i18n="settings.write_mode">Validated write mode</span>
+      <button class="action" onclick="loadSettings()" data-i18n="action.reload">Reload</button>
+      <button class="action" onclick="previewRetention()" data-i18n="action.retention_preview">Retention preview</button>
+      <button class="action" onclick="validateSettings()" data-i18n="action.validate">Validate</button>
+      <button class="action primary" onclick="saveSettings()" data-i18n="action.save">Save</button>
     </div>
   </div>
   <div id="settingsNotice"></div>
   <div id="settingsForm"></div>
   <div class="section">
-    <div class="section-title"><h2>Configuration checks</h2></div>
-    <div id="settingsChecks" class="muted">Press Validate to test Engine, repository, network and restore defaults.</div>
+    <div class="section-title"><h2 data-i18n="settings.checks">Configuration checks</h2></div>
+    <div id="settingsChecks" class="muted" data-i18n="settings.checks_hint">Press Validate to test Engine, repository, network and restore defaults.</div>
   </div>
   <div id="unknownSettings" class="section"></div>
 </section>
@@ -168,36 +168,36 @@ input[type=checkbox]{width:auto;transform:scale(1.1)}
 </div>
 
 <dialog id="restoreDialog">
-  <div class="section-title"><h2 style="margin:0">Restore native backup</h2><button class="action" onclick="document.getElementById('restoreDialog').close()">Close</button></div>
+  <div class="section-title"><h2 style="margin:0" data-i18n="restore.title">Restore native backup</h2><button class="action" onclick="document.getElementById('restoreDialog').close()" data-i18n="action.close">Close</button></div>
   <div id="restoreSource" class="notice muted"></div>
   <div class="settings-grid">
-    <div class="field"><div class="field-label">Target VM name</div><input id="restoreTargetName" type="text"></div>
-    <div class="field"><div class="field-label">Cluster</div><select id="restoreCluster"></select></div>
-    <div class="field"><div class="field-label">Storage domain</div><select id="restoreStorage"></select></div>
-    <div class="field"><div class="field-label">Network mode</div>
+    <div class="field"><div class="field-label" data-i18n="restore.target_vm">Target VM name</div><input id="restoreTargetName" type="text"></div>
+    <div class="field"><div class="field-label" data-i18n="restore.cluster">Cluster</div><select id="restoreCluster"></select></div>
+    <div class="field"><div class="field-label" data-i18n="restore.storage">Storage domain</div><select id="restoreStorage"></select></div>
+    <div class="field"><div class="field-label" data-i18n="restore.network_mode">Network mode</div>
       <select id="restoreNetworkMode">
-        <option value="none">none — no NICs</option>
-        <option value="isolated" selected>isolated — new MAC, link down</option>
-        <option value="original">original — saved MAC/profile (DR)</option>
+        <option value="none" data-i18n="restore.mode_none">none — no NICs</option>
+        <option value="isolated" selected data-i18n="restore.mode_isolated">isolated — new MAC, link down</option>
+        <option value="original" data-i18n="restore.mode_original">original — saved MAC/profile (DR)</option>
       </select>
     </div>
   </div>
-  <div class="notice warn">Restore always creates a new VM and never starts it automatically. The original network mode is refused by restore_native.py while the source VM still exists.</div>
+  <div class="notice warn" data-i18n="restore.warning">Restore always creates a new VM and never starts it automatically. The original network mode is refused by restore_native.py while the source VM still exists.</div>
   <div class="toolbar" style="justify-content:flex-end;margin-top:14px">
-    <button class="action" onclick="restorePreflight()">Preflight</button>
-    <button class="action primary" onclick="startRestore()">Execute restore</button>
+    <button class="action" onclick="restorePreflight()" data-i18n="action.preflight">Preflight</button>
+    <button class="action primary" onclick="startRestore()" data-i18n="action.execute_restore">Execute restore</button>
   </div>
 </dialog>
 
 <dialog id="tokenDialog">
-  <h2>Console token</h2>
-  <p class="muted">Enter the token from /etc/ovirt-backup/web.token. It is kept only in this browser session.</p>
+  <h2 data-i18n="token.title">Console token</h2>
+  <p class="muted" data-i18n="token.hint">Enter the token from /etc/ovirt-backup/web.token. It is kept only in this browser session.</p>
   <input id="tokenInput" type="password" autocomplete="off">
-  <div class="row" style="margin-top:12px"><button class="action primary right" onclick="saveToken()">Connect</button></div>
+  <div class="row" style="margin-top:12px"><button class="action primary right" onclick="saveToken()" data-i18n="action.connect">Connect</button></div>
 </dialog>
 
 <dialog id="outputDialog">
-  <div class="section-title"><h2 id="outputTitle" style="margin:0">Output</h2><button class="action" onclick="document.getElementById('outputDialog').close()">Close</button></div>
+  <div class="section-title"><h2 id="outputTitle" style="margin:0" data-i18n="output.title">Output</h2><button class="action" onclick="document.getElementById('outputDialog').close()" data-i18n="action.close">Close</button></div>
   <pre id="outputBox"></pre>
 </dialog>
 
@@ -208,6 +208,165 @@ let currentLogKind="backup";
 let currentVms=[];
 let restoreBackupPath="";
 let restoreSourceVm="";
+
+
+const browserLanguages=(navigator.languages&&navigator.languages.length?navigator.languages:[navigator.language||"en"])
+  .map(x=>String(x).toLowerCase());
+const uiLang=browserLanguages.some(x=>x==="ru"||x.startsWith("ru-"))?"ru":"en";
+document.documentElement.lang=uiLang;
+
+const I18N={
+  ru:{
+    "brand.console":"Консоль резервного копирования",
+    "action.refresh":"Обновить","nav.dashboard":"Обзор","nav.vms":"Виртуальные машины",
+    "nav.backups":"Резервные копии","nav.logs":"Журналы","nav.health":"Состояние","nav.settings":"Настройки",
+    "dashboard.engine":"Engine","dashboard.repo_free":"Свободно в хранилище","dashboard.last_backup":"Последняя копия",
+    "dashboard.native_lock":"Блокировка native","dashboard.scheduler":"Планировщик",
+    "dashboard.manual_operation":"Ручная операция","dashboard.recent_backups":"Последние копии",
+    "dashboard.installed_stack":"Установленные компоненты",
+    "state.no_console_operation":"Нет операции консоли","state.idle":"Ожидание","state.no_operation_log":"Журнал операции отсутствует.",
+    "action.select_all":"Выбрать все","action.clear":"Очистить","action.use_settings":"Использовать в настройках",
+    "action.dry_run_selected":"Проверить выбранные","action.backup_selected":"Создать копию выбранных",
+    "vms.title":"Виртуальные машины","vms.subtitle":"Инвентаризация Engine с дисками и хранилищами",
+    "backups.title":"Хранилище резервных копий","backups.subtitle":"manifest.json — источник фактического состояния",
+    "action.backup":"Backup","action.restore":"Restore","action.reload":"Обновить",
+    "health.title":"Состояние",
+    "settings.title":"Конфигурация native","settings.write_mode":"Проверяемый режим записи",
+    "action.retention_preview":"Предпросмотр retention","action.validate":"Проверить","action.save":"Сохранить",
+    "settings.checks":"Проверка конфигурации","settings.checks_hint":"Нажмите «Проверить», чтобы проверить Engine, хранилище, сеть и параметры восстановления.",
+    "restore.title":"Восстановление native backup","restore.target_vm":"Имя целевой VM","restore.cluster":"Кластер",
+    "restore.storage":"Хранилище","restore.network_mode":"Режим сети",
+    "restore.mode_none":"none — без сетевых интерфейсов",
+    "restore.mode_isolated":"isolated — новый MAC, link отключён",
+    "restore.mode_original":"original — сохранённые MAC/профиль (DR)",
+    "restore.warning":"Восстановление всегда создаёт новую VM и никогда не запускает её автоматически. Режим original будет отклонён restore_native.py, пока исходная VM существует.",
+    "action.preflight":"Предварительная проверка","action.execute_restore":"Выполнить восстановление",
+    "token.title":"Токен консоли","token.hint":"Введите токен из /etc/ovirt-backup/web.token. Он хранится только в этой сессии браузера.",
+    "action.connect":"Подключиться","action.close":"Закрыть","output.title":"Вывод",
+    "state.connected":"Подключено","state.error":"Ошибка","state.free":"Свободно","state.busy":"ЗАНЯТО",
+    "state.legacy":"LEGACY","state.inactive":"неактивен","state.running":"выполняется","state.complete":"завершено",
+    "state.failed":"ошибка","state.no_native_operation":"Нет native-операции","state.no_manifests":"Нет manifest",
+    "state.no_backups":"Native-копий пока нет","state.no_vms":"VM не найдены","state.storage_unknown":"хранилище не определено",
+    "log.backup":"Журнал native backup","log.restore":"Журнал native restore",
+    "dry.title":"Проверка native","dry.running":"Проверка выбранных VM: {vms}\n",
+    "backup.confirm":"Запустить реальный native FULL backup для: {vms}?",
+    "backup.start_error":"Не удалось запустить backup: {error}",
+    "restore.source":"Backup: {path}","restore.options_error":"Не удалось загрузить параметры восстановления: {error}",
+    "restore.preflight_title":"Предварительная проверка восстановления","restore.preflight_running":"Выполняется предварительная проверка восстановления…",
+    "restore.target_required":"Нужно указать имя целевой VM.",
+    "restore.confirm":"Выполнить восстановление в НОВУЮ VM «{name}» на {storage}? VM останется выключенной.",
+    "restore.start_error":"Не удалось запустить восстановление: {error}",
+    "settings.selected_copied":"Список выбранных VM перенесён в настройки. Нажмите «Проверить», затем «Сохранить».",
+    "settings.open_first":"Сначала откройте «Настройки», чтобы загрузить форму.",
+    "common.select_vm":"Выберите хотя бы одну VM.",
+    "common.error":"ОШИБКА: {error}\n{detail}",
+    "settings.load_error":"Не удалось загрузить настройки: {error}",
+    "settings.validating":"Проверка конфигурации…","settings.valid":"Конфигурация прошла проверку.",
+    "settings.invalid_runtime":"Проверка завершена с ошибками.",
+    "retention.title":"Предпросмотр retention","retention.repo":"Хранилище: {root}","retention.delete":"Будет удалено: {count}",
+    "retention.keep":"Будет сохранено: {count}","retention.none":"Завершённые native backup-каталоги удаляться не будут.",
+    "retention.dialog":"Предпросмотр retention — файлы не изменяются",
+    "settings.save_anyway":"Некоторые runtime-проверки не прошли. Всё равно сохранить структурно корректную конфигурацию?",
+    "settings.save_confirm":"Сохранить конфигурацию native backup? Предыдущий файл будет сначала сохранён в истории.",
+    "settings.saving":"Сохранение конфигурации…","settings.saved":"Конфигурация сохранена атомарно.",
+    "settings.previous":" Предыдущая версия: {path}",
+    "table.created":"Создано","table.status":"Статус","table.disks":"Диски","table.actual":"Фактически",
+    "table.name":"Имя","table.memory":"Память","table.disk_storage":"Диски / хранилище","table.directory":"Каталог",
+    "table.type":"Тип","table.checkpoint":"Checkpoint",
+    "action.restore_more":"Восстановить…","field.enabled":"Включено","field.disabled":"Выключено",
+    "field.one_per_line":"По одному значению в строке","field.secret_stored":"Сохранён; оставьте пустым, чтобы не менять",
+    "field.secret_enter":"Введите пароль","field.advanced":"дополнительно",
+    "settings.unmanaged":"Существующие неуправляемые параметры",
+    "check.ok":"✓ OK","check.fail":"✕ ОШИБКА"
+  },
+  en:{}
+};
+function t(key,vars={}){
+  let text=(I18N[uiLang]&&I18N[uiLang][key])||key;
+  for(const [name,value] of Object.entries(vars)){
+    text=text.replaceAll("{"+name+"}",String(value??""));
+  }
+  return text;
+}
+function staticText(key,fallback){
+  return uiLang==="en"?fallback:t(key);
+}
+function applyI18n(){
+  document.querySelectorAll("[data-i18n]").forEach(el=>{
+    const key=el.dataset.i18n;
+    if(uiLang!=="en"&&I18N[uiLang]?.[key])el.textContent=I18N[uiLang][key];
+  });
+}
+const STATUS_KEYS={
+  connected:"state.connected",error:"state.error",free:"state.free",busy:"state.busy",
+  legacy:"state.legacy",inactive:"state.inactive",running:"state.running",complete:"state.complete",
+  failed:"state.failed",idle:"state.idle"
+};
+function localizedStatus(value){
+  const raw=String(value??"");
+  const key=STATUS_KEYS[raw.toLowerCase()];
+  return key?staticText(key,raw):raw;
+}
+const CHECK_NAMES_RU={
+  "TLS CA":"TLS CA","Backup repository":"Хранилище backup","Repository mount":"Монтирование хранилища",
+  "Repository writable":"Запись в хранилище","Repository free space":"Свободное место",
+  "Engine API":"Engine API","VM selection":"Выбор VM","ImageIO network":"Сеть ImageIO",
+  "Restore storage domain":"Хранилище восстановления","Restore cluster":"Кластер восстановления",
+  "Config directory":"Каталог конфигурации","Config history directory":"История конфигурации",
+  "Backup log":"Журнал backup","Restore log":"Журнал restore","Native operation lock":"Блокировка native"
+};
+function checkName(name){return uiLang==="ru"?(CHECK_NAMES_RU[name]||name):name}
+const SETTING_GROUP_RU={
+  "Virtual machines":"Виртуальные машины","Engine":"Engine","Repository":"Хранилище","TLS":"TLS",
+  "Backup":"Backup","Image transfer":"Передача образов","Retention":"Retention","Disks":"Диски",
+  "Restore defaults":"Параметры восстановления","Logging":"Журналы","Safety":"Безопасность"
+};
+const SETTING_LABEL_RU={
+  vm_names:"Выбранные VM",vm_names_skip:"Исключить VM",vm_tag:"Тег VM",all_vms:"Все VM",
+  server:"URL Engine API",username:"Пользователь",password:"Пароль",backup_path:"Путь backup",
+  backup_path_must_be_mount:"Требовать mount point",storage_space_threshold:"Запас свободного места",
+  ca_file:"Файл CA",verify_tls:"Проверять TLS",require_consistency:"Требовать guest consistency",
+  imageio_network:"Логическая сеть ImageIO",imageio_max_workers:"Потоки загрузки",
+  imageio_timeout:"Таймаут ImageTransfer",imageio_timeout_policy:"Политика таймаута",
+  imageio_progress_interval:"Интервал записи прогресса",imageio_progress_percent:"Шаг прогресса в процентах",
+  backup_operation_timeout:"Таймаут операции backup",backup_keep_count:"Хранить по возрасту",
+  backup_keep_count_by_number:"Хранить по количеству",bootable_only:"Только загрузочный диск",
+  with_disks_deactivated:"Включать деактивированные диски",disks_id_exclude:"Исключённые ID дисков",
+  cluster_name:"Целевой кластер",storage_domain:"Целевое хранилище",logger_fmt:"Формат журнала",
+  native_logger_file_path:"Журнал backup",native_restore_logger_file_path:"Журнал restore",
+  dry_run:"Принудительный dry-run"
+};
+const SETTING_DESC_RU={
+  vm_names:"Явный список VM. Используйте только один режим выбора.",
+  vm_names_skip:"Backup всех VM, кроме перечисленных.",
+  vm_tag:"Backup VM с указанным тегом oVirt.",
+  all_vms:"Backup всех VM, возвращаемых Engine.",
+  backup_path:"Обычная смонтированная файловая система/NFS, не oVirt Export Domain.",
+  storage_space_threshold:"0.10 означает размер provisioned + 10% запаса.",
+  require_consistency:"Ошибка, если guest freeze/consistency получить не удалось.",
+  imageio_network:"Логическая сеть для прямого host ImageTransfer.",
+  backup_keep_count:"Пусто отключает удаление по возрасту.",
+  backup_keep_count_by_number:"Пусто отключает ограничение по количеству.",
+  storage_domain:"Значение по умолчанию; restore может его переопределить.",
+  dry_run:"Если включено, service/manual backup не создают реальные backup."
+};
+function settingGroup(group){return uiLang==="ru"?(SETTING_GROUP_RU[group]||group):group}
+function settingLabel(spec){return uiLang==="ru"?(SETTING_LABEL_RU[spec.key]||spec.label||spec.key):(spec.label||spec.key)}
+function settingDescription(spec){return uiLang==="ru"?(SETTING_DESC_RU[spec.key]||spec.description||""):(spec.description||"")}
+applyI18n();
+if(uiLang==="ru"){
+  const tableMaps=[
+    ["#recentBody","thead th",["VM","Создано","Статус","Диски","Фактически","Backup ID"]],
+    ["#vmsBody","thead th",["","Имя","Статус","vCPU","Память","Диски / хранилище"]],
+    ["#backupsBody","thead th",["VM","Каталог","Статус","Тип","Диски","Фактически","Checkpoint",""]]
+  ];
+  for(const [bodySelector,headerSelector,labels] of tableMaps){
+    const body=document.querySelector(bodySelector);
+    const table=body?.closest("table");
+    if(!table)continue;
+    [...table.querySelectorAll(headerSelector)].forEach((th,i)=>{if(labels[i]!==undefined)th.textContent=labels[i]});
+  }
+}
 
 const fmtBytes=n=>{
   if(n===null||n===undefined)return "—";
@@ -267,42 +426,42 @@ function renderChecks(result,target="settingsChecks"){
   const el=document.getElementById(target);
   const checks=result?.checks||[];
   el.innerHTML=checks.map(c=>
-    '<div class="check-card"><div class="row"><strong>'+esc(c.name)+'</strong>'+
-    '<span class="right '+(c.ok?"good":"bad")+'">'+(c.ok?"✓ OK":"✕ FAIL")+'</span></div>'+
+    '<div class="check-card"><div class="row"><strong>'+esc(checkName(c.name))+'</strong>'+
+    '<span class="right '+(c.ok?"good":"bad")+'">'+(c.ok?staticText("check.ok","✓ OK"):staticText("check.fail","✕ FAIL"))+'</span></div>'+
     '<div class="muted">'+esc(c.detail||"")+'</div></div>'
   ).join("")||'<div class="muted">No checks returned</div>';
 }
 
 async function loadOverview(){
   const d=await api("api/overview");
-  document.getElementById("engineState").textContent=d.engine.ok?"Connected":"Error";
+  document.getElementById("engineState").textContent=d.engine.ok?staticText("state.connected","Connected"):staticText("state.error","Error");
   document.getElementById("engineState").className="big "+(d.engine.ok?"good":"bad");
-  document.getElementById("engineBadge").textContent=d.engine.ok?"Engine connected":"Engine error";
+  document.getElementById("engineBadge").textContent=d.engine.ok?(uiLang==="ru"?"Engine подключён":"Engine connected"):(uiLang==="ru"?"Ошибка Engine":"Engine error");
   document.getElementById("engineBadge").className="pill "+(d.engine.ok?"good":"bad");
   document.getElementById("engineInfo").textContent=(d.engine.api_version||"API version unknown")+" · "+(d.engine.latency_ms||0)+" ms";
   document.getElementById("repoFree").textContent=fmtBytes(d.repository.free_bytes);
   document.getElementById("repoPath").textContent=d.repository.path||"Not configured";
   const b=d.last_backup;
-  document.getElementById("lastBackup").textContent=b?(b.vm_name||"—"):"None";
-  document.getElementById("lastBackupInfo").textContent=b?((b.directory||"")+" · "+(b.status||"")):"No manifests";
+  document.getElementById("lastBackup").textContent=b?(b.vm_name||"—"):(uiLang==="ru"?"Нет":"None");
+  document.getElementById("lastBackupInfo").textContent=b?((b.directory||"")+" · "+localizedStatus(b.status||"")):staticText("state.no_manifests","No manifests");
   const lock=d.lock||{};
   const legacy=d.legacy_backup_processes||[];
-  document.getElementById("lockState").textContent=legacy.length?"LEGACY":(lock.busy?"BUSY":"Free");
+  document.getElementById("lockState").textContent=legacy.length?staticText("state.legacy","LEGACY"):(lock.busy?staticText("state.busy","BUSY"):staticText("state.free","Free"));
   document.getElementById("lockState").className="big "+((legacy.length||lock.busy)?"warn":"good");
   document.getElementById("lockInfo").textContent=legacy.length?
-    ("Legacy backup.py active: "+legacy.map(x=>"pid="+x.pid).join(", ")) :
-    (lock.holder||"No native operation");
-  document.getElementById("timerState").textContent=d.timer.ActiveState||"Unavailable";
-  document.getElementById("timerInfo").textContent=d.timer.NextElapseUSecRealtime||"timer not installed/enabled";
+    ((uiLang==="ru"?"Активен legacy backup.py: ":"Legacy backup.py active: ")+legacy.map(x=>"pid="+x.pid).join(", ")) :
+    (lock.holder||staticText("state.no_native_operation","No native operation"));
+  document.getElementById("timerState").textContent=localizedStatus(d.timer.ActiveState|| (uiLang==="ru"?"Недоступен":"Unavailable"));
+  document.getElementById("timerInfo").textContent=d.timer.NextElapseUSecRealtime||(uiLang==="ru"?"timer не установлен/не включён":"timer not installed/enabled");
   document.getElementById("packages").innerHTML=Object.entries(d.packages).map(([k,v])=>kv(k,v||"not installed")).join("");
 }
 async function loadBackups(){
   const d=await api("api/backups?limit=250");
   document.getElementById("backupsBody").innerHTML=d.backups.map(b=>{
     const canRestore=String(b.status||"").toLowerCase()==="complete";
-    const action=canRestore?'<button class="action restore-btn" data-path="'+esc(encodeURIComponent(b.path||""))+'" data-vm="'+esc(encodeURIComponent(b.vm_name||""))+'">Restore…</button>':"";
+    const action=canRestore?'<button class="action restore-btn" data-path="'+esc(encodeURIComponent(b.path||""))+'" data-vm="'+esc(encodeURIComponent(b.vm_name||""))+'">'+esc(staticText("action.restore_more","Restore…"))+'</button>':"";
     return '<tr><td>'+esc(b.vm_name)+'</td><td>'+esc(b.directory)+'</td>'+
-      '<td class="'+statusClass(b.status)+'">'+esc(b.status)+'</td><td>'+esc(b.type)+(b.formats?.length?' · '+esc(b.formats.join(",")):'')+'</td>'+
+      '<td class="'+statusClass(b.status)+'">'+esc(localizedStatus(b.status))+'</td><td>'+esc(b.type)+(b.formats?.length?' · '+esc(b.formats.join(",")):'')+'</td>'+
       '<td>'+esc(b.disk_count)+'</td><td>'+fmtBytes(b.actual_size)+'</td><td>'+esc(b.checkpoint_id||"—")+'</td><td>'+action+'</td></tr>';
   }).join("")||'<tr><td colspan="8" class="muted">No native backup manifests yet</td></tr>';
   document.querySelectorAll(".restore-btn").forEach(btn=>btn.onclick=()=>openRestoreDialog(
@@ -311,7 +470,7 @@ async function loadBackups(){
   ));
   document.getElementById("recentBody").innerHTML=d.backups.slice(0,10).map(b=>
     '<tr><td>'+esc(b.vm_name)+'</td><td>'+esc(b.directory)+'</td>'+
-    '<td class="'+statusClass(b.status)+'">'+esc(b.status)+'</td><td>'+esc(b.disk_count)+'</td>'+
+    '<td class="'+statusClass(b.status)+'">'+esc(localizedStatus(b.status))+'</td><td>'+esc(b.disk_count)+'</td>'+
     '<td>'+fmtBytes(b.actual_size)+'</td><td>'+esc(b.backup_id||"—")+'</td></tr>'
   ).join("")||'<tr><td colspan="6" class="muted">No native backups yet</td></tr>';
 }
@@ -322,15 +481,15 @@ async function loadVms(){
   currentVms=d.vms||[];
   body.innerHTML=currentVms.map(v=>{
     const disks=(v.disks||[]).map(d=>{
-      const stores=(d.storage_domains||[]).map(s=>esc(s.name||s.id)+(s.address?' · '+esc(s.address):'')).join("<br>")||"storage unknown";
+      const stores=(d.storage_domains||[]).map(s=>esc(s.name||s.id)+(s.address?' · '+esc(s.address):'')).join("<br>")||staticText("state.storage_unknown","storage unknown");
       return '<div class="disk"><strong>'+esc(d.alias||d.id)+'</strong> · '+fmtBytes(d.provisioned_size)+
         (d.bootable?' · bootable':'')+'<div class="storage">'+stores+'</div></div>';
     }).join("")||(v.disk_error?'<span class="bad">'+esc(v.disk_error)+'</span>':'—');
     return '<tr><td><input class="vm-select" type="checkbox" value="'+esc(v.name)+'"></td>'+
       '<td><strong>'+esc(v.name)+'</strong><div class="code-id">'+esc(v.id)+'</div></td>'+
-      '<td class="'+statusClass(v.status)+'">'+esc(v.status)+'</td><td>'+esc(v.cpu_cores||"—")+'</td>'+
+      '<td class="'+statusClass(v.status)+'">'+esc(localizedStatus(v.status))+'</td><td>'+esc(v.cpu_cores||"—")+'</td>'+
       '<td>'+fmtBytes(v.memory)+'</td><td>'+disks+'</td></tr>';
-  }).join("")||'<tr><td colspan="6" class="muted">No VMs</td></tr>';
+  }).join("")||'<tr><td colspan="6" class="muted">'+esc(staticText("state.no_vms","No VMs"))+'</td></tr>';
 }
 function selectedVmNames(){
   return [...document.querySelectorAll(".vm-select:checked")].map(x=>x.value);
@@ -340,36 +499,36 @@ function selectAllVms(value){
 }
 async function dryRunSelected(){
   const names=selectedVmNames();
-  if(!names.length){alert("Select at least one VM.");return}
+  if(!names.length){alert(staticText("common.select_vm","Select at least one VM."));return}
   const dlg=document.getElementById("outputDialog");
-  document.getElementById("outputTitle").textContent="Native dry-run";
-  document.getElementById("outputBox").textContent="Running dry-run for: "+names.join(", ")+"\n";
+  document.getElementById("outputTitle").textContent=staticText("dry.title","Native dry-run");
+  document.getElementById("outputBox").textContent=uiLang==="ru"?t("dry.running",{vms:names.join(", ")}):("Running dry-run for: "+names.join(", ")+"\n");
   dlg.showModal();
   try{
     const d=await post("api/actions/dry-run",{vm_names:names});
     document.getElementById("outputBox").textContent=d.output||"(no output)";
   }catch(e){
-    document.getElementById("outputBox").textContent="ERROR: "+e.message+"\n"+JSON.stringify(e.data||{},null,2);
+    document.getElementById("outputBox").textContent=uiLang==="ru"?t("common.error",{error:e.message,detail:JSON.stringify(e.data||{},null,2)}):("ERROR: "+e.message+"\n"+JSON.stringify(e.data||{},null,2));
   }
 }
 async function backupSelected(){
   const names=selectedVmNames();
   if(!names.length){alert("Select at least one VM.");return}
-  if(!confirm("Start a real native FULL backup for: "+names.join(", ")+"?"))return;
+  if(!confirm(uiLang==="ru"?t("backup.confirm",{vms:names.join(", ")}):("Start a real native FULL backup for: "+names.join(", ")+"?")))return;
   try{
     const d=await post("api/actions/backup",{vm_names:names});
     showPage("dashboard");
     await loadOperation();
-    alert("Backup operation started: "+(d.operation?.id||""));
+    // One confirmation is enough: operation state is shown on Dashboard.
   }catch(e){
-    alert("Cannot start backup: "+e.message);
+    alert(uiLang==="ru"?t("backup.start_error",{error:e.message}):("Cannot start backup: "+e.message));
   }
 }
 
 function useSelectedForConfig(){
   const names=selectedVmNames();
   if(!names.length){alert("Select at least one VM.");return}
-  if(!settingsData){alert("Open Settings once so the form is loaded.");return}
+  if(!settingsData){alert(staticText("settings.open_first","Open Settings once so the form is loaded."));return}
   showPage("settings");
   const list=document.querySelector('[data-setting="vm_names"]');
   const skip=document.querySelector('[data-setting="vm_names_skip"]');
@@ -379,13 +538,13 @@ function useSelectedForConfig(){
   if(skip)skip.value="";
   if(tag)tag.value="";
   if(all)all.checked=false;
-  setNotice("Selected VM list copied into the form. Press Validate, then Save.","warn");
+  setNotice(staticText("settings.selected_copied","Selected VM list copied into the form. Press Validate, then Save."),"warn");
 }
 
 async function loadLogs(kind=currentLogKind){
   currentLogKind=kind;
   const d=await api("api/logs?kind="+encodeURIComponent(kind)+"&lines=600");
-  document.getElementById("logsTitle").textContent=kind==="restore"?"Native restore log":"Native backup log";
+  document.getElementById("logsTitle").textContent=kind==="restore"?staticText("log.restore","Native restore log"):staticText("log.backup","Native backup log");
   document.getElementById("logPath").textContent=d.path||"Log not configured";
   const box=document.getElementById("logBox");
   box.textContent=d.lines.join("\n")||"No log entries";
@@ -401,10 +560,10 @@ function inputForSetting(spec,value,secretSet){
   const id="setting-"+key;
   if(spec.type==="bool"){
     return '<div class="check-row"><input id="'+id+'" data-setting="'+esc(key)+'" data-type="bool" type="checkbox" '+(value?"checked":"")+'>'+
-      '<label for="'+id+'">'+(value?"Enabled":"Disabled")+'</label></div>';
+      '<label for="'+id+'">'+esc(value?staticText("field.enabled","Enabled"):staticText("field.disabled","Disabled"))+'</label></div>';
   }
   if(spec.type==="list"){
-    return '<textarea id="'+id+'" data-setting="'+esc(key)+'" data-type="list" placeholder="One item per line">'+esc((value||[]).join("\n"))+'</textarea>';
+    return '<textarea id="'+id+'" data-setting="'+esc(key)+'" data-type="list" placeholder="'+esc(staticText("field.one_per_line","One item per line"))+'">'+esc((value||[]).join("\n"))+'</textarea>';
   }
   if(spec.type==="choice"){
     return '<select id="'+id+'" data-setting="'+esc(key)+'" data-type="choice">'+
@@ -417,7 +576,7 @@ function inputForSetting(spec,value,secretSet){
   if(spec.max!==undefined)attrs.push('max="'+esc(spec.max)+'"');
   if(spec.step!==undefined)attrs.push('step="'+esc(spec.step)+'"');
   else if(spec.type==="float")attrs.push('step="any"');
-  const placeholder=spec.type==="secret"?(secretSet?"Stored; leave blank to keep":"Enter password"):"";
+  const placeholder=spec.type==="secret"?(secretSet?staticText("field.secret_stored","Stored; leave blank to keep"):staticText("field.secret_enter","Enter password")):"";
   const shown=spec.type==="secret"?"":(value??"");
   return '<input id="'+id+'" data-setting="'+esc(key)+'" data-type="'+esc(spec.type)+'" type="'+type+'" value="'+esc(shown)+'" placeholder="'+esc(placeholder)+'" '+attrs.join(" ")+'>';
 }
@@ -429,19 +588,20 @@ function renderSettings(data){
     (groups[spec.group]??=[]).push(spec);
   });
   document.getElementById("settingsForm").innerHTML=Object.entries(groups).map(([group,specs])=>
-    '<div class="settings-group"><h2>'+esc(group)+'</h2><div class="settings-grid">'+
+    '<div class="settings-group"><h2>'+esc(settingGroup(group))+'</h2><div class="settings-grid">'+
     specs.map(spec=>{
       const value=data.values?.[spec.key];
       const unit=spec.unit?' <span class="unit">('+esc(spec.unit)+')</span>':'';
-      const advanced=spec.advanced?' <span class="pill muted">advanced</span>':'';
-      return '<div class="field"><div class="field-label">'+esc(spec.label||spec.key)+unit+advanced+'</div>'+
+      const advanced=spec.advanced?' <span class="pill muted">'+esc(staticText("field.advanced","advanced"))+'</span>':'';
+      const desc=settingDescription(spec);
+      return '<div class="field"><div class="field-label">'+esc(settingLabel(spec))+unit+advanced+'</div>'+
         inputForSetting(spec,value,data.secret_set?.[spec.key])+
-        (spec.description?'<small>'+esc(spec.description)+'</small>':'')+'</div>';
+        (desc?'<small>'+esc(desc)+'</small>':'')+'</div>';
     }).join("")+'</div></div>'
   ).join("");
   const unknown=data.unknown||{};
   document.getElementById("unknownSettings").innerHTML=Object.keys(unknown).length?
-    '<div class="card"><h3>Unmanaged existing settings</h3>'+
+    '<div class="card"><h3>'+esc(staticText("settings.unmanaged","Unmanaged existing settings"))+'</h3>'+
     Object.entries(unknown).map(([k,v])=>kv(k,v)).join("")+'</div>':"";
 }
 async function loadOperation(){
@@ -452,12 +612,12 @@ async function loadOperation(){
     const meta=document.getElementById("operationMeta");
     const log=document.getElementById("operationLog");
     if(!op){
-      badge.textContent="Idle";badge.className="pill muted";
-      meta.textContent=d.lock?.busy?"Native lock busy: "+(d.lock.holder||""):"No console operation";
-      log.textContent="No operation log.";
+      badge.textContent=staticText("state.idle","Idle");badge.className="pill muted";
+      meta.textContent=d.lock?.busy?((uiLang==="ru"?"Native lock занят: ":"Native lock busy: ")+(d.lock.holder||"")):staticText("state.no_console_operation","No console operation");
+      log.textContent=staticText("state.no_operation_log","No operation log.");
       return;
     }
-    badge.textContent=op.status||"unknown";
+    badge.textContent=localizedStatus(op.status||"unknown");
     badge.className="pill "+((op.status==="complete")?"good":(op.status==="failed"?"bad":"warn"));
     const md=op.metadata||{};
     meta.textContent=(op.kind||"operation")+" · "+(op.id||"")+
@@ -471,7 +631,7 @@ async function loadOperation(){
 async function openRestoreDialog(path,sourceVm){
   restoreBackupPath=path;
   restoreSourceVm=sourceVm||"restored-vm";
-  document.getElementById("restoreSource").textContent="Backup: "+path;
+  document.getElementById("restoreSource").textContent=uiLang==="ru"?t("restore.source",{path}):("Backup: "+path);
   document.getElementById("restoreTargetName").value=restoreSourceVm+"_RESTORE_TEST";
   try{
     const opts=await api("api/restore-options");
@@ -486,7 +646,7 @@ async function openRestoreDialog(path,sourceVm){
     document.getElementById("restoreNetworkMode").value=opts.defaults?.network_mode||"isolated";
     document.getElementById("restoreDialog").showModal();
   }catch(e){
-    alert("Cannot load restore options: "+e.message);
+    alert(uiLang==="ru"?t("restore.options_error",{error:e.message}):("Cannot load restore options: "+e.message));
   }
 }
 function restoreRequest(){
@@ -501,8 +661,8 @@ function restoreRequest(){
 async function restorePreflight(){
   const req=restoreRequest();
   const dlg=document.getElementById("outputDialog");
-  document.getElementById("outputTitle").textContent="Restore preflight";
-  document.getElementById("outputBox").textContent="Running restore preflight…";
+  document.getElementById("outputTitle").textContent=staticText("restore.preflight_title","Restore preflight");
+  document.getElementById("outputBox").textContent=staticText("restore.preflight_running","Running restore preflight…");
   dlg.showModal();
   try{
     const d=await post("api/actions/restore-preflight",req);
@@ -513,16 +673,16 @@ async function restorePreflight(){
 }
 async function startRestore(){
   const req=restoreRequest();
-  if(!req.target_name){alert("Target VM name is required.");return}
-  if(!confirm("Execute restore to a NEW VM named "+req.target_name+" on "+req.storage_domain+"? The VM will remain DOWN."))return;
+  if(!req.target_name){alert(staticText("restore.target_required","Target VM name is required."));return}
+  if(!confirm(uiLang==="ru"?t("restore.confirm",{name:req.target_name,storage:req.storage_domain}):("Execute restore to a NEW VM named "+req.target_name+" on "+req.storage_domain+"? The VM will remain DOWN.")))return;
   try{
     const d=await post("api/actions/restore",req);
     document.getElementById("restoreDialog").close();
     showPage("dashboard");
     await loadOperation();
-    alert("Restore operation started: "+(d.operation?.id||""));
+    // One confirmation is enough: operation state is shown on Dashboard.
   }catch(e){
-    alert("Cannot start restore: "+e.message);
+    alert(uiLang==="ru"?t("restore.start_error",{error:e.message}):("Cannot start restore: "+e.message));
   }
 }
 
@@ -532,7 +692,7 @@ async function loadSettings(){
     renderSettings(d);
     setNotice("");
   }catch(e){
-    setNotice("Cannot load settings: "+e.message,"bad");
+    setNotice(uiLang==="ru"?t("settings.load_error",{error:e.message}):("Cannot load settings: "+e.message),"bad");
   }
 }
 function collectSettings(){
@@ -554,11 +714,11 @@ function renderValidationError(e){
 }
 async function validateSettings(){
   if(!settingsData){await loadSettings()}
-  setNotice("Validating configuration…","warn");
+  setNotice(staticText("settings.validating","Validating configuration…"),"warn");
   try{
     const d=await post("api/settings/validate",{settings:collectSettings()});
     renderChecks(d);
-    setNotice(d.ok?"Configuration validation passed.":"Validation completed with failed checks.",d.ok?"good":"warn");
+    setNotice(d.ok?staticText("settings.valid","Configuration validation passed."):staticText("settings.invalid_runtime","Validation completed with failed checks."),d.ok?"good":"warn");
     return d;
   }catch(e){
     renderValidationError(e);
@@ -571,14 +731,14 @@ async function previewRetention(){
   try{
     const d=await post("api/settings/retention-preview",{settings:collectSettings()});
     const lines=[];
-    lines.push("Retention preview");
-    lines.push("Repository: "+(d.root||"not configured"));
-    lines.push("Would delete: "+(d.delete_count||0));
-    lines.push("Would keep: "+(d.keep_count||0));
+    lines.push(staticText("retention.title","Retention preview"));
+    lines.push(uiLang==="ru"?t("retention.repo",{root:d.root||"не настроено"}):("Repository: "+(d.root||"not configured")));
+    lines.push(uiLang==="ru"?t("retention.delete",{count:d.delete_count||0}):("Would delete: "+(d.delete_count||0)));
+    lines.push(uiLang==="ru"?t("retention.keep",{count:d.keep_count||0}):("Would keep: "+(d.keep_count||0)));
     lines.push("");
     (d.delete||[]).forEach(x=>lines.push("DELETE  "+x.vm_name+"/"+x.directory+"  ["+(x.reasons||[]).join(", ")+"]"));
-    if(!(d.delete||[]).length)lines.push("No completed native backup directories would be deleted.");
-    document.getElementById("outputTitle").textContent="Retention preview — no files are changed";
+    if(!(d.delete||[]).length)lines.push(staticText("retention.none","No completed native backup directories would be deleted."));
+    document.getElementById("outputTitle").textContent=staticText("retention.dialog","Retention preview — no files are changed");
     document.getElementById("outputBox").textContent=lines.join("\n");
     document.getElementById("outputDialog").showModal();
   }catch(e){
@@ -590,15 +750,15 @@ async function saveSettings(){
   if(!settingsData){await loadSettings()}
   const validation=await validateSettings();
   if(!validation||!validation.ok){
-    if(!confirm("Some runtime checks failed. Save the structurally valid configuration anyway?"))return;
+    if(!confirm(staticText("settings.save_anyway","Some runtime checks failed. Save the structurally valid configuration anyway?")))return;
   }
-  if(!confirm("Save native backup configuration? The previous file will be backed up first."))return;
-  setNotice("Saving configuration…","warn");
+  if(!confirm(staticText("settings.save_confirm","Save native backup configuration? The previous file will be backed up first.")))return;
+  setNotice(staticText("settings.saving","Saving configuration…"),"warn");
   try{
     const d=await post("api/settings",{settings:collectSettings()});
     renderSettings(d.settings);
     renderChecks(d.checks);
-    setNotice("Configuration saved atomically."+(d.backup?" Previous version: "+d.backup:""),"good");
+    setNotice(staticText("settings.saved","Configuration saved atomically.")+(d.backup?(uiLang==="ru"?t("settings.previous",{path:d.backup}):(" Previous version: "+d.backup)):""),"good");
     await loadOverview();
   }catch(e){
     renderValidationError(e);
