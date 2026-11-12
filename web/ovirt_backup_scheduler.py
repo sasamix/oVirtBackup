@@ -8,6 +8,7 @@ Requests arrive over a Unix socket writable only by root and group ovirt-backup.
 """
 
 import argparse
+import configparser
 import grp
 import json
 import os
@@ -25,6 +26,7 @@ DROPIN_DIR = Path("/etc/systemd/system/ovirt-backup.timer.d")
 DROPIN_PATH = DROPIN_DIR / "10-schedule.conf"
 TIMER_UNIT = "ovirt-backup.timer"
 SERVICE_UNIT = "ovirt-backup.service"
+BACKUP_CONFIG_PATH = Path("/etc/ovirt-backup/config/backup.cfg")
 GROUP = "ovirt-backup"
 MAX_REQUEST = 64 * 1024
 
@@ -241,6 +243,46 @@ def systemctl_state():
     }
 
 
+def backup_config_guard():
+    if not BACKUP_CONFIG_PATH.is_file():
+        return {
+            "ok": False,
+            "path": str(BACKUP_CONFIG_PATH),
+            "dry_run": None,
+            "reason": "canonical backup configuration is missing",
+        }
+
+    cp = configparser.RawConfigParser()
+    try:
+        with open(BACKUP_CONFIG_PATH, "r", encoding="utf-8") as fh:
+            cp.read_file(fh)
+        if not cp.has_section("config"):
+            raise SchedulerError("missing [config] section")
+        dry_run = cp.getboolean("config", "dry_run", fallback=False)
+    except Exception as exc:
+        return {
+            "ok": False,
+            "path": str(BACKUP_CONFIG_PATH),
+            "dry_run": None,
+            "reason": "cannot parse canonical backup configuration: %s" % exc,
+        }
+
+    if dry_run:
+        return {
+            "ok": False,
+            "path": str(BACKUP_CONFIG_PATH),
+            "dry_run": True,
+            "reason": "canonical backup configuration has dry_run=True",
+        }
+
+    return {
+        "ok": True,
+        "path": str(BACKUP_CONFIG_PATH),
+        "dry_run": False,
+        "reason": None,
+    }
+
+
 def legacy_cron_entries():
     paths = []
     for candidate in (Path("/etc/crontab"),):
@@ -326,6 +368,7 @@ def status():
 
     cron = legacy_cron_entries()
     processes = legacy_processes()
+    backup_guard = backup_config_guard()
     timer = systemctl_state()
     return {
         "ok": calendar_error is None,
@@ -337,12 +380,14 @@ def status():
         "legacy_cron_entries": cron,
         "legacy_processes": processes,
         "migration_guard": {
-            "blocked": bool(cron or processes),
+            "blocked": bool(cron or processes or not backup_guard["ok"]),
             "reason": (
                 "legacy cron/process detected"
-                if cron or processes else None
+                if cron or processes
+                else backup_guard["reason"]
             ),
         },
+        "backup_config_guard": backup_guard,
         "paths": {
             "config": str(CONFIG_PATH),
             "dropin": str(DROPIN_PATH),
@@ -358,15 +403,17 @@ def validate_payload(payload):
     detail = validate_calendar(expr)
     cron = legacy_cron_entries()
     processes = legacy_processes()
+    backup_guard = backup_config_guard()
     return {
         "ok": True,
         "config": config,
         "calendar": expr,
         "calendar_detail": detail,
         "migration_guard": {
-            "blocked": bool(cron or processes),
+            "blocked": bool(cron or processes or not backup_guard["ok"]),
             "legacy_cron_entries": cron,
             "legacy_processes": processes,
+            "backup_config_guard": backup_guard,
         },
     }
 
@@ -377,10 +424,20 @@ def apply_payload(payload):
     guard = validated["migration_guard"]
 
     if config["enabled"] and guard["blocked"]:
+        parts = []
+        if guard.get("legacy_cron_entries") or guard.get("legacy_processes"):
+            parts.append(
+                "legacy backup cron/process is present; complete cutover first"
+            )
+        backup_guard = guard.get("backup_config_guard") or {}
+        if not backup_guard.get("ok", True):
+            parts.append(
+                backup_guard.get("reason")
+                or "canonical backup configuration is not ready"
+            )
         raise SchedulerError(
-            "native timer cannot be enabled while legacy backup cron/process "
-            "is present; save the schedule disabled, complete cutover, then "
-            "enable the native timer"
+            "native timer cannot be enabled: %s"
+            % "; ".join(parts or ["migration guard is blocking enablement"])
         )
 
     gid = grp.getgrnam(GROUP).gr_gid
