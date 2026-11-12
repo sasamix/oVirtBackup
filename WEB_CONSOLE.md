@@ -18,6 +18,9 @@ configuration is the remaining migration step before switching from the legacy
   /var/lib/ovirt-backup/config-backups/.
 - Data sources: official oVirt Python SDK, native backup manifests, native
   backup/restore logs, systemd state and local filesystem statistics.
+- Scheduler privilege separation: the web process connects to
+  `/run/ovirt-backup/scheduler.sock`. A dedicated root controller can only
+  validate/apply the native timer schedule and inspect legacy cron state.
 
 The backend runs as the unprivileged `ovirt-backup` user. Only
 `/etc/ovirt-backup/config/` is writable inside the systemd sandbox. The
@@ -47,6 +50,8 @@ Validated write operations currently enabled:
 - POST /api/actions/backup
 - POST /api/actions/restore-preflight
 - POST /api/actions/restore
+- POST /api/scheduler/validate
+- POST /api/scheduler
 
 Manual native backup and restore actions are enabled. Scheduler mutation is
 implemented separately from backup configuration so it can remain disabled
@@ -214,3 +219,47 @@ or a VM is created. The restored VM is never auto-started.
 The header shows the console semantic version and, when running from a live Git
 checkout, the short Git commit. This makes it possible to verify the exact code
 currently served without opening the repository on the host.
+
+
+## Scheduler configuration
+
+The Scheduler page configures `ovirt-backup.timer` without granting root
+privileges to the web process.
+
+The unprivileged console talks over
+`/run/ovirt-backup/scheduler.sock` to
+`ovirt-backup-scheduler-control.service`. The controller validates a fixed
+scheduler schema, writes:
+
+```text
+/etc/ovirt-backup/scheduler.json
+/etc/systemd/system/ovirt-backup.timer.d/10-schedule.conf
+```
+
+and then runs the required `systemctl daemon-reload` and timer
+enable/disable operation.
+
+Supported settings are:
+
+- enabled/disabled;
+- start time in 24-hour `HH:MM`;
+- one or more weekdays;
+- IANA timezone, default `Asia/Almaty`;
+- optional randomized delay from 0 to 3600 seconds.
+
+The generated timer is persistent. `systemd-analyze calendar` validates the
+exact calendar expression before it can be applied.
+
+### Migration guard
+
+The controller scans system/user cron files for the legacy `backup.py` entry
+and also scans running processes. A schedule may be prepared and saved while
+legacy cron is present as long as `enabled=false`.
+
+The controller refuses to enable the native timer while either a legacy cron
+entry or a running legacy `backup.py` process is detected. It never edits,
+comments, removes, signals or stops legacy cron/processes.
+
+This makes cutover an explicit final migration action: first disable the exact
+legacy cron entry, wait for any old backup process to finish, then enable the
+native timer from the Scheduler page.
