@@ -183,6 +183,126 @@ def imageio_network_route(connection, transfer, cp):
     return routed_url, tls_hostname, target_ip
 
 
+def imageio_host_for_storage_domain(connection, storage_domain_id, cp):
+    """
+    Pick the oVirt host that directly serves a host-local NFS storage domain.
+
+    The match is automatic: storage.address must equal exactly one host IPv4
+    address on imageio_network. External NFS (for example Synology) or any
+    ambiguous/non-NFS layout is left to Engine rather than guessed.
+    """
+    if not storage_domain_id:
+        return None
+
+    system = connection.system_service()
+    try:
+        storage_domain = (
+            system.storage_domains_service()
+            .storage_domain_service(storage_domain_id)
+            .get()
+        )
+    except Exception:
+        LOG.exception(
+            "Cannot inspect storage domain %s; Engine will select ImageTransfer host",
+            storage_domain_id,
+        )
+        return None
+
+    storage_address = getattr(
+        getattr(storage_domain, "storage", None), "address", None
+    )
+    if not storage_address:
+        LOG.info(
+            "Storage domain %s (%s) has no storage.address; "
+            "Engine will select ImageTransfer host",
+            getattr(storage_domain, "name", storage_domain_id),
+            storage_domain_id,
+        )
+        return None
+
+    network_name = cp.get(
+        "config", "imageio_network", fallback=""
+    ).strip()
+    if not network_name:
+        return None
+
+    networks = system.networks_service().list(
+        search="name=%s" % network_name
+    )
+    exact_networks = [
+        network for network in networks
+        if getattr(network, "name", None) == network_name
+    ]
+    if len(exact_networks) != 1:
+        LOG.warning(
+            "Cannot uniquely resolve imageio_network %r; "
+            "Engine will select ImageTransfer host",
+            network_name,
+        )
+        return None
+
+    network_id = exact_networks[0].id
+    candidates = []
+
+    for host in system.hosts_service().list():
+        if getattr(host, "status", None) != types.HostStatus.UP:
+            continue
+
+        host_service = system.hosts_service().host_service(host.id)
+        try:
+            attachments = host_service.network_attachments_service().list()
+        except Exception:
+            LOG.exception(
+                "Cannot inspect network attachments for host %s",
+                getattr(host, "name", host.id),
+            )
+            continue
+
+        addresses = set()
+        for attachment in attachments:
+            attached_network_id = getattr(
+                getattr(attachment, "network", None), "id", None
+            )
+            if attached_network_id != network_id:
+                continue
+
+            for assignment in (
+                getattr(attachment, "ip_address_assignments", None) or []
+            ):
+                address = getattr(
+                    getattr(assignment, "ip", None), "address", None
+                )
+                if address:
+                    addresses.add(address)
+
+        if storage_address in addresses:
+            candidates.append(host)
+
+    if len(candidates) != 1:
+        LOG.info(
+            "Storage domain %s (%s) address=%s maps to %d UP hosts on %s; "
+            "Engine will select ImageTransfer host",
+            getattr(storage_domain, "name", storage_domain_id),
+            storage_domain_id,
+            storage_address,
+            len(candidates),
+            network_name,
+        )
+        return None
+
+    host = candidates[0]
+    LOG.info(
+        "Auto-selected ImageTransfer host %s (%s) for storage domain %s "
+        "(%s, address=%s)",
+        host.name,
+        host.id,
+        getattr(storage_domain, "name", storage_domain_id),
+        storage_domain_id,
+        storage_address,
+    )
+    return types.Host(id=host.id)
+
+
 @contextmanager
 def temporary_dns_override(hostname, address):
     if not hostname or not address:
@@ -711,7 +831,8 @@ class LogProgress:
             self._last_log = now
 
 
-def create_upload_transfer(connection, disk_id, cp):
+def create_upload_transfer(
+        connection, disk_id, cp, storage_domain_id=None):
     system = connection.system_service()
     transfers = system.image_transfers_service()
     policy = cp.get(
@@ -719,21 +840,9 @@ def create_upload_transfer(connection, disk_id, cp):
     )
     timeout = cp.getint("config", "imageio_timeout", fallback=120)
 
-    # For restore uploads we may pin ImageIO to the host closest to the target
-    # storage. On srv00-data this avoids the extra srv03 -> NFS -> srv00 hop.
-    host_name = cp.get(
-        "config", "imageio_upload_host", fallback=""
-    ).strip()
-    transfer_host = None
-    if host_name:
-        host = find_exact(system.hosts_service(), host_name, "Host")
-        transfer_host = types.Host(id=host.id)
-        LOG.info(
-            "Pinning upload ImageTransfer for disk %s to host %s (%s)",
-            disk_id,
-            host.name,
-            host.id,
-        )
+    transfer_host = imageio_host_for_storage_domain(
+        connection, storage_domain_id, cp
+    )
 
     transfer = transfers.add(
         types.ImageTransfer(
@@ -827,8 +936,14 @@ def finalize_transfer(connection, transfer, disk_id, cp):
             )
 
 
-def upload_image(connection, path, disk_id, cp):
-    transfer = create_upload_transfer(connection, disk_id, cp)
+def upload_image(
+        connection, path, disk_id, cp, storage_domain_id=None):
+    transfer = create_upload_transfer(
+        connection,
+        disk_id,
+        cp,
+        storage_domain_id=storage_domain_id,
+    )
     started = time.monotonic()
     transfer_service = (
         connection.system_service()
@@ -1239,7 +1354,11 @@ def main():
             write_state(state_path, state)
 
             transfer_id, elapsed = upload_image(
-                connection, item["path"], disk.id, cp
+                connection,
+                item["path"],
+                disk.id,
+                cp,
+                storage_domain_id=storage.id,
             )
             state_disk["transfer_id"] = transfer_id
             state_disk["upload_seconds"] = round(elapsed, 3)
