@@ -36,8 +36,29 @@ thead th{position:sticky;top:calc(var(--sticky-top) + var(--page-bar-height, 0px
 .page-bar .notice{margin:8px 0 0;max-height:20vh;overflow:auto}
 .operation-log summary{cursor:pointer;color:var(--muted)}
 .operation-log pre{margin-top:10px;max-height:260px}
-.vm-actions,.backup-actions{min-width:7rem;text-align:right}
-.backup-actions button + button{margin-top:4px}
+.vm-actions{min-width:7rem;text-align:right}
+.backup-table td{vertical-align:middle}
+.backup-table th,.backup-metric{white-space:nowrap}
+.backup-copy strong,.backup-copy .code-id{display:block}
+.backup-copy .code-id{margin-top:3px}
+.backup-checkpoint{margin-top:5px;font-size:12px;color:var(--muted)}
+.backup-checkpoint summary{cursor:pointer;width:max-content}
+.backup-checkpoint code{overflow-wrap:anywhere}
+.backup-actions{text-align:right}
+.backup-action-buttons{display:flex;justify-content:flex-end;gap:6px}
+.backup-action-buttons button{white-space:nowrap}
+.backup-mobile-label{display:none}
+@media(max-width:800px){
+  .backup-table,.backup-table tbody{display:block}
+  .backup-table thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+  .backup-table tbody tr{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px 12px;padding:12px;border-bottom:1px solid var(--line)}
+  .backup-table tbody td{border:0;padding:0}
+  .backup-copy{grid-column:span 2}
+  .backup-state{text-align:right;overflow-wrap:normal}
+  .backup-actions,.backup-empty{grid-column:1/-1}
+  .backup-action-buttons{flex-wrap:wrap}
+  .backup-mobile-label{display:block;color:var(--muted);font-size:11px}
+}
 .vm-backup-flag{text-align:center;white-space:nowrap}
 .vm-backup-flag span{font-weight:700}
 .vm-backup-btn{visibility:hidden}
@@ -151,10 +172,13 @@ input[type=checkbox]{width:auto;transform:scale(1.1)}
 
 <section id="backups" class="page">
   <div class="page-bar">
-    <div class="section-title"><h2 data-i18n="backups.title">Backup repository</h2><span class="muted" data-i18n="backups.subtitle">manifest.json is the source of truth</span></div>
+    <div class="section-title"><h2 data-i18n="backups.title">Backup repository</h2></div>
     <div id="backupNotice" aria-live="polite"></div>
   </div>
-  <table><thead><tr><th>VM</th><th>Directory</th><th>Status</th><th>Type</th><th>Disks</th><th>Actual</th><th>Checkpoint</th><th></th></tr></thead><tbody id="backupsBody"></tbody></table>
+  <table class="backup-table">
+    <thead><tr><th scope="col">Backup</th><th scope="col">Status</th><th scope="col">Type</th><th scope="col">Disks</th><th scope="col">Size</th><th scope="col"></th></tr></thead>
+    <tbody id="backupsBody"></tbody>
+  </table>
 </section>
 
 <section id="logs" class="page">
@@ -341,7 +365,7 @@ const I18N={
     "action.select_all":"Выбрать все","action.clear":"Очистить","action.use_settings":"Использовать в настройках",
     "action.dry_run_selected":"Проверить выбранные","action.backup_selected":"Создать копию выбранных",
     "vms.title":"Виртуальные машины","vms.subtitle":"Инвентаризация Engine с дисками и хранилищами",
-    "backups.title":"Хранилище резервных копий","backups.subtitle":"manifest.json — источник фактического состояния",
+    "backups.title":"Хранилище резервных копий",
     "action.backup":"Резервное копирование","action.restore":"Восстановление","action.reload":"Обновить",
     "health.title":"Состояние",
     "settings.title":"Конфигурация native",
@@ -518,7 +542,7 @@ if(uiLang==="ru"){
   const tableMaps=[
     ["#recentBody","thead th",["VM","Создано","Статус","Диски","Фактически","Backup ID"]],
     ["#vmsBody","thead th",["","Имя","Статус","vCPU","Память","Диски / хранилище","Бэкап"]],
-    ["#backupsBody","thead th",["VM","Каталог","Статус","Тип","Диски","Фактически","Checkpoint",""]]
+    ["#backupsBody","thead th",["Копия","Статус","Тип","Диски","Размер",""]]
   ];
   for(const [bodySelector,headerSelector,labels] of tableMaps){
     const body=document.querySelector(bodySelector);
@@ -629,15 +653,24 @@ async function loadOverview(){
 }
 async function loadBackups(){
   const d=await api("api/backups?limit=250");
-  document.getElementById("backupsBody").innerHTML=d.backups.map(b=>{
+  const body=document.getElementById("backupsBody");
+  const expanded=new Set([...body.querySelectorAll(".backup-checkpoint[open]")].map(el=>el.dataset.path));
+  const metric=(label,value)=>'<td class="backup-metric"><span class="backup-mobile-label" aria-hidden="true">'+label+'</span>'+value+'</td>';
+  body.innerHTML=d.backups.map(b=>{
     const canRestore=String(b.status||"").toLowerCase()==="complete";
     const pending=b.status==="delete_pending";
     const action=canRestore?'<button class="action restore-btn" data-path="'+esc(encodeURIComponent(b.path||""))+'" data-vm="'+esc(encodeURIComponent(b.vm_name||""))+'">'+esc(staticText("action.restore_more","Restore…"))+'</button>':"";
     const deleteAction=b.can_delete?'<button class="action danger delete-backup-btn" data-path="'+esc(encodeURIComponent(b.path))+'" data-vm="'+esc(b.vm_name)+'" data-directory="'+esc(b.directory)+'">'+esc(staticText("action.delete_backup","Delete…"))+'</button>':"";
-    return '<tr><td>'+esc(b.vm_name)+'</td><td>'+esc(b.directory)+'</td>'+
-      '<td class="'+statusClass(b.status)+'">'+esc(pending?staticText("backup.delete_pending","Deletion incomplete"):localizedStatus(b.status))+'</td><td>'+esc(b.type)+(b.formats?.length?' · '+esc(b.formats.join(",")):'')+'</td>'+
-      '<td>'+esc(b.disk_count)+'</td><td>'+fmtBytes(b.actual_size)+'</td><td>'+esc(b.checkpoint_id||"—")+'</td><td class="backup-actions">'+action+' '+deleteAction+'</td></tr>';
-  }).join("")||'<tr><td colspan="8" class="muted">No native backup manifests yet</td></tr>';
+    const path=encodeURIComponent(b.path||"");
+    const checkpoint=b.checkpoint_id?'<details class="backup-checkpoint" data-path="'+esc(path)+'"'+
+      (expanded.has(path)?" open":"")+'><summary>Checkpoint</summary><code>'+esc(b.checkpoint_id)+'</code></details>':"";
+    return '<tr><td class="backup-copy"><strong>'+esc(b.vm_name)+'</strong><span class="code-id muted">'+esc(b.directory)+'</span>'+checkpoint+'</td>'+
+      '<td class="backup-state '+statusClass(b.status)+'">'+esc(pending?staticText("backup.delete_pending","Deletion incomplete"):localizedStatus(b.status))+'</td>'+
+      metric(uiLang==="ru"?"Тип":"Type",esc(b.type)+(b.formats?.length?' · '+esc(b.formats.join(", ")):""))+
+      metric(uiLang==="ru"?"Диски":"Disks",esc(b.disk_count))+
+      metric(uiLang==="ru"?"Размер":"Size",fmtBytes(b.actual_size))+
+      '<td class="backup-actions"><div class="backup-action-buttons">'+action+deleteAction+'</div></td></tr>';
+  }).join("")||'<tr><td colspan="6" class="backup-empty muted">'+(uiLang==="ru"?"Резервных копий пока нет":"No native backups yet")+'</td></tr>';
   document.querySelectorAll(".restore-btn").forEach(btn=>btn.onclick=()=>openRestoreDialog(
     decodeURIComponent(btn.dataset.path||""),
     decodeURIComponent(btn.dataset.vm||"")
