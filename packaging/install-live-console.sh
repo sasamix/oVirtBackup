@@ -146,7 +146,7 @@ Before=ovirt-backup-web.service
 [Service]
 Type=simple
 User=root
-Group=root
+Group=ovirt-backup
 ExecStart=/usr/bin/python3 $REPO_DIR/web/ovirt_backup_scheduler.py serve --socket $SCHEDULER_SOCKET
 Restart=on-failure
 RestartSec=2
