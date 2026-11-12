@@ -184,17 +184,13 @@ input[type=checkbox]{width:auto;transform:scale(1.1)}
 <section id="logs" class="page">
   <div class="page-bar">
     <div class="section-title">
-      <div><h2 id="logsTitle" style="margin:0">Native backup log</h2><div id="logPath" class="muted"></div></div>
+      <h2 id="logsTitle">Native backup log</h2>
       <div class="toolbar">
-        <button class="action" onclick="loadLogs('backup')" data-i18n="action.backup">Backup</button>
+        <button class="action" onclick="loadLogs('backup')" data-i18n="log.backup_tab">Backup</button>
         <button class="action" onclick="loadLogs('restore')" data-i18n="action.restore">Restore</button>
         <button class="action" onclick="loadLogs(currentLogKind)" data-i18n="action.reload">Reload</button>
       </div>
     </div>
-  </div>
-  <div id="deletionLog" class="section" hidden>
-    <div class="section-title"><h2 data-i18n="log.deletions">Backup deletions</h2></div>
-    <pre id="deletionLogBox"></pre>
   </div>
   <pre id="logBox">Loading…</pre>
 </section>
@@ -419,9 +415,8 @@ const I18N={
     "action.backup_vm":"Создать копию",
     "vms.in_config":"Включена",
     "vms.not_in_config":"Не включена",
-    "log.deletions":"Удаление резервных копий",
+    "log.backup_tab":"Бэкап",
     "log.no_entries":"Нет записей в журнале",
-    "log.not_configured":"Файл журнала не настроен",
     "backup.delete_audit_error":"Копия удалена, но запись в историю удаления сохранить не удалось.",
     "action.delete_backup":"Удалить…",
     "backup.delete_confirm":"Удалить копию {vm} / {directory} без возможности восстановления?",
@@ -798,12 +793,8 @@ async function loadLogs(kind=currentLogKind){
   const d=await api("api/logs?kind="+encodeURIComponent(kind)+"&lines=600");
   if(kind!==currentLogKind)return;
   document.getElementById("logsTitle").textContent=kind==="restore"?staticText("log.restore","Native restore log"):staticText("log.backup","Native backup log");
-  document.getElementById("logPath").textContent=d.path||staticText("log.not_configured","Log file not configured");
   const box=document.getElementById("logBox");
   box.textContent=d.lines.join("\n")||staticText("log.no_entries","No log entries");
-  const deletions=d.deletions||[];
-  document.getElementById("deletionLog").hidden=!deletions.length;
-  document.getElementById("deletionLogBox").textContent=deletions.join("\n");
   box.scrollTop=box.scrollHeight;
 }
 async function loadHealth(){

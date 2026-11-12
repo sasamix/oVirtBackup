@@ -15,6 +15,7 @@ import sys
 import tempfile
 import threading
 import time
+from collections import deque
 from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -1555,6 +1556,49 @@ def tail_file(path, lines):
     return result["output"].splitlines()
 
 
+LOG_TIMESTAMP = re.compile(
+    r"^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}"
+    r"(?:[.,](?:\d{6}|\d{3}))?(?:Z|[+-]\d{2}:\d{2})?"
+)
+
+
+def log_timestamp(line):
+    match = LOG_TIMESTAMP.match(line)
+    if match is None:
+        return None, line
+    try:
+        stamp = datetime.fromisoformat(
+            match.group().replace(",", ".").replace("Z", "+00:00")
+        ).astimezone()
+    except ValueError:
+        return None, line
+    return stamp, line[match.end():]
+
+
+def merge_backup_log(native_lines, deletion_lines, lines):
+    deletions = []
+    undated = []
+    for line in deletion_lines:
+        stamp, message = log_timestamp(line)
+        if stamp is None:
+            undated.append(line)
+        else:
+            local_time = stamp.strftime("%Y-%m-%d %H:%M:%S,%f")[:-3]
+            deletions.append((stamp, local_time + message))
+
+    pending = deque(sorted(deletions, key=lambda item: item[0]))
+    merged = []
+    for line in native_lines:
+        stamp, _message = log_timestamp(line)
+        if stamp is not None:
+            while pending and pending[0][0] <= stamp:
+                merged.append(pending.popleft()[1])
+        merged.append(line)
+    merged.extend(line for _stamp, line in pending)
+    merged.extend(undated)
+    return merged[-max(1, min(lines, 2000)):]
+
+
 def atomic_write_json(path, data):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -2418,13 +2462,16 @@ class Handler(BaseHTTPRequestHandler):
                         "native_logger_file_path",
                         fallback=cp.get("config", "logger_file_path", fallback=""),
                     )
+                log_lines = tail_file(logfile, lines)
+                if kind == "backup":
+                    deletions = tail_file(
+                        self.app.operation_dir / "backup-deletions.log", lines
+                    )
+                    log_lines = merge_backup_log(log_lines, deletions, lines)
                 self.send_json({
                     "kind": kind,
                     "path": logfile,
-                    "lines": tail_file(logfile, lines),
-                    "deletions": tail_file(
-                        self.app.operation_dir / "backup-deletions.log", lines
-                    ) if kind == "backup" else [],
+                    "lines": log_lines,
                 })
             elif path == "/api/settings":
                 self.send_json(settings_payload(cp, self.app.config_path))
