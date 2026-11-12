@@ -36,7 +36,15 @@ thead th{position:sticky;top:calc(var(--sticky-top) + var(--page-bar-height, 0px
 .page-bar .notice{margin:8px 0 0;max-height:20vh;overflow:auto}
 .operation-log summary{cursor:pointer;color:var(--muted)}
 .operation-log pre{margin-top:10px;max-height:260px}
-.vm-actions{min-width:7rem;text-align:right}
+.vm-actions{width:1%;text-align:right;white-space:nowrap}
+#vms th:nth-child(3),#vms th:nth-child(4),#vms th:nth-child(5),
+#vms td:nth-child(3),#vms td:nth-child(4),#vms td:nth-child(5){
+  width:1%;
+  white-space:nowrap;
+}
+@media(max-width:600px){
+  #vms td:nth-child(3),#vms td:nth-child(5),.vm-actions{white-space:normal}
+}
 .backup-table td{vertical-align:middle}
 .backup-table th,.backup-metric{white-space:nowrap}
 .backup-copy strong,.backup-copy .code-id{display:block}
@@ -59,7 +67,7 @@ thead th{position:sticky;top:calc(var(--sticky-top) + var(--page-bar-height, 0px
   .backup-action-buttons{flex-wrap:wrap}
   .backup-mobile-label{display:block;color:var(--muted);font-size:11px}
 }
-.vm-backup-flag{text-align:center;white-space:nowrap}
+.vm-backup-flag{width:1%;text-align:center;white-space:nowrap}
 .vm-backup-flag span{font-weight:700}
 .vm-backup-btn{visibility:hidden}
 tr:has(.vm-select:checked){background:var(--panel2)}
@@ -165,7 +173,7 @@ input[type=checkbox]{width:auto;transform:scale(1.1)}
     </div>
   </div>
   <table>
-    <thead><tr><th></th><th>Name</th><th>Status</th><th>vCPU</th><th>Memory</th><th>Disks / storage</th><th scope="col" class="vm-backup-flag">Backup</th><th></th></tr></thead>
+    <thead><tr><th></th><th>Name</th><th>Status</th><th>vCPU</th><th>Memory</th><th>Disks / storage</th><th scope="col" class="vm-backup-flag">Backup</th><th scope="col" class="vm-actions"></th></tr></thead>
     <tbody id="vmsBody"></tbody>
   </table>
 </section>
