@@ -57,6 +57,7 @@ install -Dpm 0644 packaging/logrotate/ovirt-backup \
 install -d %{buildroot}%{_localstatedir}/lib/ovirt-backup
 install -d %{buildroot}%{_localstatedir}/lib/ovirt-backup/config-backups
 install -d %{buildroot}%{_localstatedir}/lib/ovirt-backup/web-operations
+install -d %{buildroot}%{_localstatedir}/lib/ovirt-backup/restores
 install -d %{buildroot}%{_localstatedir}/log/ovirt-backup
 
 %pre
@@ -86,7 +87,7 @@ fi
 %systemd_postun ovirt-backup.timer
 
 %files
-%license LICENSE
+%license LICENSE.md
 %doc README.md NATIVE_BACKUP_V2.md WEB_CONSOLE.md
 %{_libexecdir}/ovirt-backup/backup_native.py
 %{_libexecdir}/ovirt-backup/restore_native.py
@@ -105,6 +106,7 @@ fi
 %dir %attr(0750,ovirt-backup,ovirt-backup) %{_localstatedir}/lib/ovirt-backup
 %dir %attr(0750,ovirt-backup,ovirt-backup) %{_localstatedir}/lib/ovirt-backup/config-backups
 %dir %attr(0750,ovirt-backup,ovirt-backup) %{_localstatedir}/lib/ovirt-backup/web-operations
+%dir %attr(0750,ovirt-backup,ovirt-backup) %{_localstatedir}/lib/ovirt-backup/restores
 %dir %attr(0750,ovirt-backup,ovirt-backup) %{_localstatedir}/log/ovirt-backup
 
 %changelog
