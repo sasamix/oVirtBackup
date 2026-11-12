@@ -476,7 +476,7 @@ async function loadBackups(){
 }
 async function loadVms(){
   const body=document.getElementById("vmsBody");
-  body.innerHTML='<tr><td colspan="6"><span class="spinner"></span> Loading Engine disk inventory…</td></tr>';
+  body.innerHTML='<tr><td colspan="6"><span class="spinner"></span> '+esc(uiLang==="ru"?"Загрузка инвентаризации Engine…":"Loading Engine disk inventory…")+'</td></tr>';
   const d=await api("api/vms?details=1");
   currentVms=d.vms||[];
   body.innerHTML=currentVms.map(v=>{
@@ -513,7 +513,7 @@ async function dryRunSelected(){
 }
 async function backupSelected(){
   const names=selectedVmNames();
-  if(!names.length){alert("Select at least one VM.");return}
+  if(!names.length){alert(staticText("common.select_vm","Select at least one VM."));return}
   if(!confirm(uiLang==="ru"?t("backup.confirm",{vms:names.join(", ")}):("Start a real native FULL backup for: "+names.join(", ")+"?")))return;
   try{
     const d=await post("api/actions/backup",{vm_names:names});
@@ -527,7 +527,7 @@ async function backupSelected(){
 
 function useSelectedForConfig(){
   const names=selectedVmNames();
-  if(!names.length){alert("Select at least one VM.");return}
+  if(!names.length){alert(staticText("common.select_vm","Select at least one VM."));return}
   if(!settingsData){alert(staticText("settings.open_first","Open Settings once so the form is loaded."));return}
   showPage("settings");
   const list=document.querySelector('[data-setting="vm_names"]');
@@ -668,7 +668,7 @@ async function restorePreflight(){
     const d=await post("api/actions/restore-preflight",req);
     document.getElementById("outputBox").textContent=d.output||"(no output)";
   }catch(e){
-    document.getElementById("outputBox").textContent="ERROR: "+e.message+"\n"+JSON.stringify(e.data||{},null,2);
+    document.getElementById("outputBox").textContent=uiLang==="ru"?t("common.error",{error:e.message,detail:JSON.stringify(e.data||{},null,2)}):("ERROR: "+e.message+"\n"+JSON.stringify(e.data||{},null,2));
   }
 }
 async function startRestore(){
