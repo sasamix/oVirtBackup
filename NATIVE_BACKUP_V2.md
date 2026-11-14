@@ -443,3 +443,41 @@ primary cause of the 16-20 MiB/s run. qemu-nbd is simply being asked to read
 too little data on average. The remaining key intermediary to measure is the
 `ovirt-imageio` daemon process that accepts the four HTTP worker connections
 and issues NBD requests.
+
+
+### Root cause confirmed: ovirt-imageio single-core CPU bottleneck (2026-11-15)
+
+During the slow VMBitrix backup, `ovirt-imageio` PID 19226 on `srv00`
+was measured with `pidstat -dru -p 19226 1 10`:
+
+- average user CPU: 99.3%;
+- average system CPU: 0.2%;
+- average total CPU: 99.5%;
+- iodelay: 0.
+
+Thread view showed four active transfer threads, each consuming roughly 25% CPU,
+while the process as a whole stayed at approximately one CPU core:
+
+- TID 2760008: ~26.1%;
+- TID 2760010: ~26.3%;
+- TID 2760011: ~25.4%;
+- TID 2760012: ~25.4%.
+
+At the same time:
+
+- the backup client had four ESTABLISHED HTTP connections to
+  `srv00:54322`;
+- qemu-nbd used only about 1.1% CPU and averaged only about 4.3 MiB/s reads;
+- source NFS showed low RTT, zero retransmissions, and zero RPC backlog;
+- Engine backup Python averaged only about 12.8% CPU and had zero iodelay.
+
+Therefore the current 16-20 MiB/s VMBitrix backup is bottlenecked inside the
+host-side `ovirt-imageio` daemon at approximately one CPU core. The four
+client workers are real, but they do not produce more than one core worth of
+host-side imageio processing. Do not spend more time tuning NFS, routing,
+client worker count, or qemu-nbd before addressing this daemon-side CPU limit.
+
+The measurement proves a one-core CPU bottleneck; it does not by itself prove
+whether the exact implementation cause is the Python GIL, another serialization
+point, or CPU-heavy processing in the daemon. Determine that from the installed
+ovirt-imageio version/source before changing production service architecture.
