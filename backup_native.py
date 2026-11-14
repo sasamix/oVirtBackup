@@ -956,6 +956,13 @@ def create_transfer(connection, backup_id, disk_id, cp):
         "config", "imageio_timeout_policy", fallback="cancel"
     )
     timeout = cp.getint("config", "imageio_timeout", fallback=120)
+    inactivity_timeout = cp.getint(
+        "config", "imageio_inactivity_timeout", fallback=300
+    )
+    if inactivity_timeout < 60 or inactivity_timeout > 3600:
+        raise RuntimeError(
+            "imageio_inactivity_timeout must be between 60 and 3600 seconds"
+        )
 
     # For live VM Backup, Engine owns the backup host and backup URL.
     # Do not force a transfer host based on storage.address: the disk data is
@@ -967,8 +974,17 @@ def create_transfer(connection, backup_id, disk_id, cp):
             backup=types.Backup(id=backup_id),
             direction=types.ImageTransferDirection.DOWNLOAD,
             format=types.DiskFormat.RAW,
+            inactivity_timeout=inactivity_timeout,
             timeout_policy=types.ImageTransferTimeoutPolicy(policy),
         )
+    )
+    LOG.info(
+        "ImageTransfer %s created for disk %s with inactivity_timeout=%ds "
+        "timeout_policy=%s",
+        transfer.id,
+        disk_id,
+        inactivity_timeout,
+        policy,
     )
     service = transfers.image_transfer_service(transfer.id)
     started = time.monotonic()
@@ -1045,6 +1061,77 @@ def create_transfer(connection, backup_id, disk_id, cp):
                 raise RuntimeError(
                     "Timeout initializing ImageTransfer %s" % transfer.id
                 )
+
+
+def cancel_transfer_and_wait(connection, transfer_id, cp):
+    """
+    Cancel a failed ImageTransfer and wait until Engine no longer considers it
+    active before the owning VM backup is finalized.
+
+    On newer Engine versions a finished transfer entity may remain in the
+    database for cleanup, so FINISHED_* is sufficient; older versions remove
+    the transfer and return 404.
+    """
+    timeout = cp.getint("config", "imageio_timeout", fallback=120)
+    service = (
+        connection.system_service()
+        .image_transfers_service()
+        .image_transfer_service(transfer_id)
+    )
+
+    try:
+        service.cancel()
+    except sdk.NotFoundError:
+        LOG.info("ImageTransfer %s already removed", transfer_id)
+        return True
+    except Exception:
+        LOG.exception("Cannot cancel failed ImageTransfer %s", transfer_id)
+        return False
+
+    started = time.monotonic()
+    last_phase = None
+
+    while True:
+        time.sleep(1)
+        try:
+            current = service.get()
+        except sdk.NotFoundError:
+            LOG.info("ImageTransfer %s removed after cancel", transfer_id)
+            return True
+        except Exception:
+            LOG.exception(
+                "Cannot query ImageTransfer %s after cancel", transfer_id
+            )
+            return False
+
+        phase = getattr(current, "phase", None)
+        if phase != last_phase:
+            LOG.info(
+                "Waiting for cancelled ImageTransfer %s: phase=%s",
+                transfer_id,
+                phase,
+            )
+            last_phase = phase
+
+        if phase in (
+            types.ImageTransferPhase.FINISHED_SUCCESS,
+            types.ImageTransferPhase.FINISHED_FAILURE,
+        ):
+            LOG.info(
+                "ImageTransfer %s is no longer active: phase=%s",
+                transfer_id,
+                phase,
+            )
+            return True
+
+        if time.monotonic() - started > timeout:
+            LOG.error(
+                "Timeout waiting for cancelled ImageTransfer %s to stop; "
+                "last phase=%s",
+                transfer_id,
+                phase,
+            )
+            return False
 
 
 def finalize_transfer(connection, transfer, disk_id, cp):
@@ -1151,19 +1238,11 @@ def download_disk(connection, backup, disk, disk_dir, cp):
             disk_id,
             transfer.id,
         )
-        transfer_service = (
-            connection.system_service()
-            .image_transfers_service()
-            .image_transfer_service(transfer.id)
+        cancel_transfer_and_wait(
+            connection,
+            transfer.id,
+            cp,
         )
-        try:
-            transfer_service.cancel()
-        except sdk.NotFoundError:
-            pass
-        except Exception:
-            LOG.exception(
-                "Cannot cancel failed ImageTransfer %s", transfer.id
-            )
         raise
     else:
         finalize_transfer(connection, transfer, disk_id, cp)
