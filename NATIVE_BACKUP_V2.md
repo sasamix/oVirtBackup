@@ -541,3 +541,16 @@ Operational consequence:
 The bug is especially visible on workloads generating many non-contiguous read
 ranges; VMBitrix's almost fully allocated 100 GiB image and its request pattern
 triggered the pathological range-accounting cost.
+
+
+### Aborted VMBitrix transfer cleanup result (2026-11-15)
+
+The slow VMBitrix test was intentionally aborted. The ImageTransfer was
+cancelled and the incomplete repository directory
+`20261115_011309.failed-020304` was deleted successfully.
+
+However, the owning VM Backup object
+`92187b59-5df9-46c9-ac34-f4143b634f72` remained in phase `ready` after
+the first cleanup script. This is **not** a fully cleaned state: do not start
+another backup until this VM Backup is explicitly finalized and reaches a
+terminal phase (or is removed), otherwise a backup/snapshot lock can remain.
