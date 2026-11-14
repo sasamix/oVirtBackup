@@ -713,3 +713,67 @@ run and the completed transfer averaged ~85.9 MiB/s across 93 GiB of actual
 data.
 
 The patch is therefore considered production-validated on srv00.
+
+
+### RangeList patch applied on srv03 (2026-11-15)
+
+The same guarded ovirt-imageio RangeList patch validated on `srv00` was
+applied successfully on `srv03`.
+
+Installed package:
+
+`ovirt-imageio-daemon-2.5.2-1.el9.x86_64`
+
+Patched module:
+
+`/usr/lib64/python3.9/site-packages/ovirt_imageio/_internal/measure.py`
+
+Original backup:
+
+`/root/ovirt-imageio-rangelist-backups/20261115_030345/measure.py`
+
+Validation:
+
+- RangeList sanity test passed: `[(50, 400)]`;
+- Python compilation passed in the guarded patch script;
+- `ovirt-imageio.service` restarted and is active.
+
+Rollback:
+
+```bash
+cp -a '/root/ovirt-imageio-rangelist-backups/20261115_030345/measure.py' '/usr/lib64/python3.9/site-packages/ovirt_imageio/_internal/measure.py'
+python3 -m py_compile '/usr/lib64/python3.9/site-packages/ovirt_imageio/_internal/measure.py'
+systemctl restart ovirt-imageio
+```
+
+### Console v0.5.3: scheduler wording and throughput logging
+
+Console v0.5.3 makes two operator-facing fixes.
+
+Scheduler page:
+
+- the saved scheduler configuration and the native `ovirt-backup.timer`
+  state are shown as separate concepts;
+- the drift warning no longer tells the operator to press Save merely to
+  reconcile them;
+- it explicitly states that the native timer remains disabled unless scheduling
+  is intentionally migrated to it.
+
+This is important because `ovirt-backup-scheduler-control.service` is a
+privileged controller for the timer; it is not itself a clock-driven backup
+scheduler. The live installer still leaves the native timer enable state
+unchanged.
+
+Backup progress logging:
+
+- progress now reports an interval/current throughput calculated since the
+  previous progress log;
+- cumulative average throughput is reported separately;
+- ETA continues to use the cumulative average.
+
+Example format:
+
+`current 104.2 MiB/s, avg 98.7 MiB/s, ETA 742s`
+
+This avoids confusing a falling cumulative average with the actual current
+transfer rate during performance diagnosis.
