@@ -876,6 +876,7 @@ class LogProgress:
         self._created = time.monotonic()
         self._started = None
         self._last_log = self._created
+        self._last_done = 0
         self._last_percent = -self.percent_step
         self._lock = threading.Lock()
 
@@ -908,7 +909,7 @@ class LogProgress:
                 self._started = now
                 self._last_log = now
             elapsed = max(now - self._started, 0.001)
-            rate = self._done / elapsed
+            average_rate = self._done / elapsed
 
             percent = None
             if self._size:
@@ -924,28 +925,36 @@ class LogProgress:
             if not (due_time or due_percent or finished):
                 return
 
+            interval_elapsed = max(now - self._last_log, 0.001)
+            interval_done = max(self._done - self._last_done, 0)
+            current_rate = interval_done / interval_elapsed
+
             if self._size:
                 remaining = max(self._size - self._done, 0)
-                eta = remaining / rate if rate > 0 else 0
+                eta = remaining / average_rate if average_rate > 0 else 0
                 LOG.info(
                     "Download progress disk %s: %.1f%%, %.2f/%.2f GiB, "
-                    "%.1f MiB/s, ETA %ds",
+                    "current %.1f MiB/s, avg %.1f MiB/s, ETA %ds",
                     self.disk_id,
                     percent,
                     self._done / 1024**3,
                     self._size / 1024**3,
-                    rate / 1024**2,
+                    current_rate / 1024**2,
+                    average_rate / 1024**2,
                     int(eta),
                 )
                 self._last_percent = int(percent // self.percent_step) * self.percent_step
             else:
                 LOG.info(
-                    "Download progress disk %s: %.2f GiB, %.1f MiB/s",
+                    "Download progress disk %s: %.2f GiB, "
+                    "current %.1f MiB/s, avg %.1f MiB/s",
                     self.disk_id,
                     self._done / 1024**3,
-                    rate / 1024**2,
+                    current_rate / 1024**2,
+                    average_rate / 1024**2,
                 )
 
+            self._last_done = self._done
             self._last_log = now
 
 
