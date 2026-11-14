@@ -33,7 +33,7 @@ SENSITIVE_KEYS = {"password", "passwd", "token", "secret", "credential", "privat
 DEFAULT_CONFIG_BACKUP_DIR = "/var/lib/ovirt-backup/config-backups"
 DEFAULT_OPERATION_LOCK = "/var/lib/ovirt-backup/operation.lock"
 DEFAULT_SCHEDULER_SOCKET = "/run/ovirt-backup/scheduler.sock"
-CONSOLE_VERSION = "0.5.0"
+CONSOLE_VERSION = "0.5.1"
 SESSION_COOKIE = "ovirt_backup_session"
 SESSION_MAX_AGE = 30 * 24 * 60 * 60
 SESSION_BROWSER_AGE = 12 * 60 * 60
@@ -158,6 +158,20 @@ SETTINGS_SCHEMA = {
         "min": 10,
         "max": 3600,
         "unit": "seconds",
+    },
+    "imageio_http_read_timeout": {
+        "group": "Image transfer",
+        "label": "ImageIO HTTP read timeout",
+        "type": "int",
+        "default": 300,
+        "min": 10,
+        "max": 3600,
+        "unit": "seconds",
+        "advanced": True,
+        "description": (
+            "Socket read timeout used by the ImageIO HTTP backend. "
+            "Large-disk EXTENTS requests can exceed the upstream 60 second default."
+        ),
     },
     "imageio_timeout_policy": {
         "group": "Image transfer",
