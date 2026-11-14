@@ -344,3 +344,29 @@ Therefore the current 16-20 MiB/s VMBitrix backup slowdown is **not** explained
 by a small NFS rsize/wsize or by the source traffic taking the wrong network.
 Further diagnosis should focus on source-volume behavior and NFS/RPC latency or
 retransmissions during the active qemu-nbd read.
+
+
+### VMBitrix source allocation and cumulative NFS RPC statistics (2026-11-15)
+
+The active source volume for the slow VMBitrix backup has:
+
+- virtual/file size: 107374182400 bytes = 100 GiB;
+- allocated blocks: 195058416 x 512 bytes, approximately 93.0 GiB;
+- `du -h`: 94G.
+
+Therefore this disk is almost fully allocated. Sparse/zero skipping can save only
+a small fraction of the 100 GiB image, so the observed 16-20 MiB/s logical
+progress is close to actual data-read throughput for much of this run.
+
+Cumulative source NFS mountstats for `192.168.150.5:/data` showed:
+
+- READ operations: 17,537,673;
+- retransmitted READ operations: 0 in the per-op counters;
+- cumulative READ RTT: 33,964,855 ms, about 1.94 ms/op;
+- cumulative READ execute time: 37,124,941 ms, about 2.12 ms/op.
+
+These lifetime averages do not indicate an obvious persistent NFS latency or
+retransmission problem, but they are cumulative over the long-lived mount and
+cannot diagnose the current slow interval. Use interval-based `nfsiostat` or
+equivalent measurements during the active backup before attributing the
+slowdown to source NFS latency.
