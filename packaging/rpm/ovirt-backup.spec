@@ -1,0 +1,149 @@
+Name:           ovirt-backup-console
+Version:        %{?version_override}%{!?version_override:0.5.1}
+Release:        0.1%{?dist}
+Summary:        Native oVirt VM backup tool and local web console
+License:        MIT
+URL:            https://github.com/sasamix/oVirtBackup
+Source0:        %{name}-%{version}.tar.gz
+
+BuildArch:      noarch
+
+Requires:       python3
+Requires:       python3-ovirt-engine-sdk4
+Requires:       ovirt-imageio-client
+Requires:       qemu-img
+Requires:       httpd
+Requires:       systemd
+
+%description
+Native online full backups for oVirt virtual machines using the VM Backup API
+and ImageTransfer, plus a lightweight local web console. The implementation
+does not use the deprecated oVirt Export Domain workflow.
+
+%prep
+%autosetup -n %{name}-%{version}
+
+%build
+# Pure Python and static web assets.
+
+%install
+install -Dpm 0755 backup_native.py \
+    %{buildroot}%{_libexecdir}/ovirt-backup/backup_native.py
+install -Dpm 0755 restore_native.py \
+    %{buildroot}%{_libexecdir}/ovirt-backup/restore_native.py
+install -Dpm 0755 web/ovirt_backup_web.py \
+    %{buildroot}%{_libexecdir}/ovirt-backup/ovirt_backup_web.py
+install -Dpm 0755 web/ovirt_backup_runner.py \
+    %{buildroot}%{_libexecdir}/ovirt-backup/ovirt_backup_runner.py
+install -Dpm 0755 web/ovirt_backup_scheduler.py \
+    %{buildroot}%{_libexecdir}/ovirt-backup/ovirt_backup_scheduler.py
+install -Dpm 0644 web/static/index.html \
+    %{buildroot}%{_datadir}/ovirt-backup/web/index.html
+
+install -d %{buildroot}%{_sysconfdir}/ovirt-backup/config
+install -Dpm 0640 config_native_example.cfg \
+    %{buildroot}%{_sysconfdir}/ovirt-backup/config/backup.cfg
+
+install -Dpm 0644 packaging/systemd/ovirt-backup.service \
+    %{buildroot}%{_unitdir}/ovirt-backup.service
+install -Dpm 0644 packaging/systemd/ovirt-backup.timer \
+    %{buildroot}%{_unitdir}/ovirt-backup.timer
+install -Dpm 0644 packaging/systemd/ovirt-backup-web.service \
+    %{buildroot}%{_unitdir}/ovirt-backup-web.service
+install -Dpm 0644 packaging/systemd/ovirt-backup-scheduler-control.service \
+    %{buildroot}%{_unitdir}/ovirt-backup-scheduler-control.service
+
+install -Dpm 0644 packaging/apache/ovirt-backup.conf \
+    %{buildroot}%{_sysconfdir}/httpd/conf.d/ovirt-backup.conf
+install -Dpm 0644 packaging/logrotate/ovirt-backup \
+    %{buildroot}%{_sysconfdir}/logrotate.d/ovirt-backup
+
+install -d %{buildroot}%{_localstatedir}/lib/ovirt-backup
+install -d %{buildroot}%{_localstatedir}/lib/ovirt-backup/config-backups
+install -d %{buildroot}%{_localstatedir}/lib/ovirt-backup/web-operations
+install -d %{buildroot}%{_localstatedir}/lib/ovirt-backup/restores
+install -d %{buildroot}%{_localstatedir}/log/ovirt-backup
+
+%pre
+getent group ovirt-backup >/dev/null || groupadd -r ovirt-backup
+getent passwd ovirt-backup >/dev/null || \
+    useradd -r -g ovirt-backup -d %{_localstatedir}/lib/ovirt-backup \
+    -s /sbin/nologin -c "oVirt Backup" ovirt-backup
+exit 0
+
+%post
+%systemd_post ovirt-backup-web.service
+%systemd_post ovirt-backup-scheduler-control.service
+if [ ! -s %{_sysconfdir}/ovirt-backup/web.token ]; then
+    umask 027
+    python3 -c 'import secrets; print(secrets.token_urlsafe(32))' \
+        > %{_sysconfdir}/ovirt-backup/web.token
+    chown root:ovirt-backup %{_sysconfdir}/ovirt-backup/web.token
+    chmod 0640 %{_sysconfdir}/ovirt-backup/web.token
+fi
+
+%preun
+%systemd_preun ovirt-backup-web.service
+%systemd_preun ovirt-backup-scheduler-control.service
+%systemd_preun ovirt-backup.timer
+
+%postun
+%systemd_postun_with_restart ovirt-backup-web.service
+%systemd_postun_with_restart ovirt-backup-scheduler-control.service
+%systemd_postun ovirt-backup.timer
+
+%files
+%license LICENSE.md
+%doc README.md NATIVE_BACKUP_V2.md WEB_CONSOLE.md
+%{_libexecdir}/ovirt-backup/backup_native.py
+%{_libexecdir}/ovirt-backup/restore_native.py
+%{_libexecdir}/ovirt-backup/ovirt_backup_web.py
+%{_libexecdir}/ovirt-backup/ovirt_backup_runner.py
+%{_libexecdir}/ovirt-backup/ovirt_backup_scheduler.py
+%{_datadir}/ovirt-backup/web/index.html
+%dir %attr(0750,root,ovirt-backup) %{_sysconfdir}/ovirt-backup
+%dir %attr(0750,ovirt-backup,ovirt-backup) %{_sysconfdir}/ovirt-backup/config
+%config(noreplace) %attr(0640,ovirt-backup,ovirt-backup) %{_sysconfdir}/ovirt-backup/config/backup.cfg
+%ghost %attr(0640,root,ovirt-backup) %{_sysconfdir}/ovirt-backup/web.token
+%ghost %attr(0640,root,ovirt-backup) %{_sysconfdir}/ovirt-backup/scheduler.json
+%config(noreplace) %{_sysconfdir}/httpd/conf.d/ovirt-backup.conf
+%config(noreplace) %{_sysconfdir}/logrotate.d/ovirt-backup
+%{_unitdir}/ovirt-backup.service
+%{_unitdir}/ovirt-backup.timer
+%{_unitdir}/ovirt-backup-web.service
+%{_unitdir}/ovirt-backup-scheduler-control.service
+%dir %attr(0750,ovirt-backup,ovirt-backup) %{_localstatedir}/lib/ovirt-backup
+%dir %attr(0750,ovirt-backup,ovirt-backup) %{_localstatedir}/lib/ovirt-backup/config-backups
+%dir %attr(0750,ovirt-backup,ovirt-backup) %{_localstatedir}/lib/ovirt-backup/web-operations
+%dir %attr(0750,ovirt-backup,ovirt-backup) %{_localstatedir}/lib/ovirt-backup/restores
+%dir %attr(0750,ovirt-backup,ovirt-backup) %{_localstatedir}/log/ovirt-backup
+
+%changelog
+* Sun Nov 15 2026 sasamix <asm@pioner.kz> - 0.5.1-0.1
+- Work around ovirt-imageio 60 second HTTP EXTENTS read timeout.
+- Use Engine-selected live VM backup host instead of storage-domain host affinity.
+- Separate ImageIO metadata latency from actual transfer throughput.
+
+* Fri Nov 13 2026 oVirtBackup contributors - 0.5.0-0.1
+- Prepare the native console for new installations and preserve existing schedules.
+- Reuse Engine sessions, add repository deletion and a filterable audit log.
+
+* Fri Nov 13 2026 sasamix <asm@pioner.kz> - 0.4.0-0.1
+- Add safe scheduler configuration through a root-isolated Unix socket controller.
+- Add scheduler UI, migration guard, systemd timer drop-in management and status.
+- Keep legacy cron untouched and refuse native timer enablement before cutover.
+
+* Fri Nov 13 2026 sasamix <asm@pioner.kz> - 0.3.0-0.1
+- Original-MAC isolated restore mode and localized fixed console UI.
+- Console version and live Git build shown in header.
+- Single-confirm manual operations.
+
+* Thu Nov 12 2026 sasamix <asm@pioner.kz> - 0.2.0-0.1
+- Validated configuration console with atomic settings writes.
+- VM disk/storage inventory, native dry-run and retention preview.
+- Persistent manual backup/restore runner and operation status UI.
+- Separate backup/restore logs and native operation lock status.
+- Canonical writable config isolated under /etc/ovirt-backup/config.
+
+* Thu Oct 08 2026 sasamix <asm@pioner.kz> - 0.1.0-0.1
+- Initial native VM Backup API implementation and read-only web console.

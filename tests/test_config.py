@@ -1,4 +1,4 @@
-from cStringIO import StringIO
+from io import StringIO
 from config import Config
 
 
@@ -13,7 +13,9 @@ default_config_data = [
     "export_domain=backup",
     "timeout=5",
     "cluster_name=Default",
+    "datacenter_name=Default",
     "backup_keep_count=3",
+    "backup_keep_count_by_number=3",
     "dry_run=False",
     "vm_name_max_length=32",
     "use_short_suffix=False",

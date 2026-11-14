@@ -1,0 +1,1625 @@
+#!/usr/bin/env python3
+"""
+Native FULL backup for oVirt using VmBackupsService + ImageTransfer.
+
+This script deliberately avoids the deprecated Export Domain workflow:
+no manual snapshot, no temporary cloned VM, no VM export.
+"""
+
+import argparse
+import configparser
+import fcntl
+import datetime as dt
+import inspect
+import json
+import logging
+import os
+import shutil
+import socket
+import subprocess
+import sys
+import threading
+import time
+from contextlib import contextmanager
+from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
+
+import ovirtsdk4 as sdk
+import ovirtsdk4.types as types
+from ovirt_imageio import client as imageio_client
+from ovirt_imageio._internal.backends import http as imageio_http_backend
+
+
+LOG = logging.getLogger("ovirt-native-backup")
+MAX_VMS = 400
+
+OPERATION_LOCK_PATH = "/var/lib/ovirt-backup/operation.lock"
+
+
+def acquire_operation_lock(label):
+    """
+    Serialize native backup and restore operations on this HostedEngine.
+
+    The kernel releases flock automatically if the process exits or crashes.
+    A second native operation waits instead of competing for storage/network.
+    """
+    os.makedirs(os.path.dirname(OPERATION_LOCK_PATH), exist_ok=True)
+    handle = open(OPERATION_LOCK_PATH, "a+", encoding="utf-8")
+
+    try:
+        try:
+            fcntl.flock(
+                handle.fileno(),
+                fcntl.LOCK_EX | fcntl.LOCK_NB,
+            )
+        except BlockingIOError:
+            handle.seek(0)
+            holder = handle.read().strip() or "unknown native operation"
+            LOG.warning(
+                "Another native backup/restore operation is active (%s); "
+                "waiting for %s",
+                holder,
+                OPERATION_LOCK_PATH,
+            )
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+
+        handle.seek(0)
+        handle.truncate()
+        handle.write(
+            "%s pid=%d started=%s\n"
+            % (
+                label,
+                os.getpid(),
+                time.strftime("%Y-%m-%d %H:%M:%S"),
+            )
+        )
+        handle.flush()
+
+        LOG.info(
+            "Acquired native backup/restore lock: %s",
+            OPERATION_LOCK_PATH,
+        )
+        return handle
+    except Exception:
+        handle.close()
+        raise
+
+
+def release_operation_lock(handle):
+    if handle is None:
+        return
+
+    try:
+        handle.seek(0)
+        handle.truncate()
+        handle.flush()
+    finally:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            handle.close()
+
+
+
+
+def cfg_json(cp, name, default):
+    raw = cp.get("config", name, fallback=None)
+    return default if raw in (None, "") else json.loads(raw)
+
+
+def load_config(path):
+    cp = configparser.RawConfigParser()
+    with open(path, "r", encoding="utf-8") as fh:
+        cp.read_file(fh)
+    if not cp.has_section("config"):
+        raise RuntimeError("Missing [config] section")
+    return cp
+
+
+def configure_logging(cp, debug):
+    fmt = cp.get("config", "logger_fmt", fallback="%(asctime)s: %(message)s")
+    filename = cp.get(
+        "config",
+        "native_logger_file_path",
+        fallback=cp.get("config", "logger_file_path", fallback=""),
+    )
+    level = logging.DEBUG if debug else logging.INFO
+
+    # Keep progress visible in interactive runs while preserving the logfile
+    # used by unattended/systemd executions.
+    root = logging.getLogger()
+    root.setLevel(level)
+    for handler in list(root.handlers):
+        root.removeHandler(handler)
+
+    formatter = logging.Formatter(fmt)
+
+    console = logging.StreamHandler()
+    console.setLevel(level)
+    console.setFormatter(formatter)
+    root.addHandler(console)
+
+    if filename:
+        file_handler = logging.FileHandler(filename)
+        file_handler.setLevel(level)
+        file_handler.setFormatter(formatter)
+        root.addHandler(file_handler)
+
+
+def connect(cp):
+    ca_file = cp.get(
+        "config", "ca_file", fallback="/etc/pki/ovirt-engine/ca.pem"
+    )
+    verify_tls = cp.getboolean("config", "verify_tls", fallback=True)
+    if verify_tls and not os.path.isfile(ca_file):
+        raise RuntimeError("CA file does not exist: %s" % ca_file)
+
+    return sdk.Connection(
+        url=cp.get("config", "server"),
+        username=cp.get("config", "username"),
+        password=cp.get("config", "password"),
+        ca_file=ca_file if verify_tls else None,
+        insecure=not verify_tls,
+        debug=False,
+    )
+
+
+def imageio_network_route(connection, transfer, cp):
+    network_name = cp.get(
+        "config", "imageio_network", fallback=""
+    ).strip()
+    if not network_name:
+        return transfer.transfer_url, None, None
+
+    host_id = getattr(getattr(transfer, "host", None), "id", None)
+    if not host_id:
+        LOG.warning(
+            "imageio_network=%s is configured but ImageTransfer %s "
+            "does not report a host; using Engine/default ImageIO route",
+            network_name,
+            transfer.id,
+        )
+        return transfer.transfer_url, None, None
+
+    system = connection.system_service()
+    host_service = (
+        system.hosts_service()
+        .host_service(host_id)
+    )
+    host = host_service.get()
+
+    networks = system.networks_service().list(
+        search="name=%s" % network_name
+    )
+    exact = [
+        network for network in networks
+        if getattr(network, "name", None) == network_name
+    ]
+    if len(exact) != 1:
+        raise RuntimeError(
+            "imageio_network %r: expected exactly one logical network, "
+            "found %d" % (network_name, len(exact))
+        )
+    network_id = exact[0].id
+
+    addresses = []
+    for attachment in host_service.network_attachments_service().list():
+        attached_network_id = getattr(
+            getattr(attachment, "network", None), "id", None
+        )
+        if attached_network_id != network_id:
+            continue
+
+        for assignment in (
+            getattr(attachment, "ip_address_assignments", None) or []
+        ):
+            address = getattr(
+                getattr(assignment, "ip", None), "address", None
+            )
+            if address and "." in address:
+                addresses.append(address)
+
+    addresses = sorted(set(addresses))
+    if len(addresses) != 1:
+        LOG.warning(
+            "Host %s ImageTransfer %s: logical network %s has %d usable "
+            "IPv4 addresses %r; using Engine/default ImageIO route",
+            getattr(host, "name", host_id),
+            transfer.id,
+            network_name,
+            len(addresses),
+            addresses,
+        )
+        return transfer.transfer_url, None, None
+
+    target_ip = addresses[0]
+    parsed = urlsplit(transfer.transfer_url)
+    if not parsed.scheme or not parsed.path:
+        raise RuntimeError(
+            "Invalid ImageTransfer URL for %s" % transfer.id
+        )
+
+    tls_hostname = (
+        getattr(host, "name", None)
+        or parsed.hostname
+    )
+    if not tls_hostname:
+        raise RuntimeError(
+            "Cannot determine TLS hostname for ImageTransfer %s"
+            % transfer.id
+        )
+
+    port = parsed.port
+    netloc = tls_hostname
+    if port is not None:
+        netloc = "%s:%d" % (tls_hostname, port)
+
+    routed_url = urlunsplit(
+        (
+            parsed.scheme,
+            netloc,
+            parsed.path,
+            parsed.query,
+            parsed.fragment,
+        )
+    )
+
+    LOG.info(
+        "ImageIO direct network route: transfer=%s host=%s network=%s "
+        "TLS=%s TCP=%s:%s proxy_fallback=disabled",
+        transfer.id,
+        getattr(host, "name", host_id),
+        network_name,
+        tls_hostname,
+        target_ip,
+        port or 443,
+    )
+
+    return routed_url, tls_hostname, target_ip
+
+
+def imageio_host_for_storage_domain(connection, storage_domain_id, cp):
+    """
+    Pick the oVirt host that directly serves a host-local NFS storage domain.
+
+    The match is automatic: storage.address must equal exactly one host IPv4
+    address on imageio_network. External NFS (for example Synology) or any
+    ambiguous/non-NFS layout is left to Engine rather than guessed.
+    """
+    if not storage_domain_id:
+        return None
+
+    system = connection.system_service()
+    try:
+        storage_domain = (
+            system.storage_domains_service()
+            .storage_domain_service(storage_domain_id)
+            .get()
+        )
+    except Exception:
+        LOG.exception(
+            "Cannot inspect storage domain %s; Engine will select ImageTransfer host",
+            storage_domain_id,
+        )
+        return None
+
+    storage_address = getattr(
+        getattr(storage_domain, "storage", None), "address", None
+    )
+    if not storage_address:
+        LOG.info(
+            "Storage domain %s (%s) has no storage.address; "
+            "Engine will select ImageTransfer host",
+            getattr(storage_domain, "name", storage_domain_id),
+            storage_domain_id,
+        )
+        return None
+
+    # Storage domains may be configured with an IPv4 address or a hostname.
+    # Resolve hostnames so a host-local NFS export still maps to the oVirt host
+    # owning that address on imageio_network.
+    storage_addresses = {storage_address}
+    try:
+        storage_addresses.update(
+            item[4][0]
+            for item in socket.getaddrinfo(
+                storage_address,
+                None,
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+            )
+            if item and item[4] and item[4][0]
+        )
+    except socket.gaierror as exc:
+        LOG.warning(
+            "Cannot resolve storage address %s for domain %s: %s",
+            storage_address,
+            getattr(storage_domain, "name", storage_domain_id),
+            exc,
+        )
+
+    network_name = cp.get(
+        "config", "imageio_network", fallback=""
+    ).strip()
+    if not network_name:
+        return None
+
+    networks = system.networks_service().list(
+        search="name=%s" % network_name
+    )
+    exact_networks = [
+        network for network in networks
+        if getattr(network, "name", None) == network_name
+    ]
+    if len(exact_networks) != 1:
+        LOG.warning(
+            "Cannot uniquely resolve imageio_network %r; "
+            "Engine will select ImageTransfer host",
+            network_name,
+        )
+        return None
+
+    network_id = exact_networks[0].id
+    candidates = []
+
+    for host in system.hosts_service().list():
+        if getattr(host, "status", None) != types.HostStatus.UP:
+            continue
+
+        host_service = system.hosts_service().host_service(host.id)
+        try:
+            attachments = host_service.network_attachments_service().list()
+        except Exception:
+            LOG.exception(
+                "Cannot inspect network attachments for host %s",
+                getattr(host, "name", host.id),
+            )
+            continue
+
+        addresses = set()
+        for attachment in attachments:
+            attached_network_id = getattr(
+                getattr(attachment, "network", None), "id", None
+            )
+            if attached_network_id != network_id:
+                continue
+
+            for assignment in (
+                getattr(attachment, "ip_address_assignments", None) or []
+            ):
+                address = getattr(
+                    getattr(assignment, "ip", None), "address", None
+                )
+                if address:
+                    addresses.add(address)
+
+        if storage_addresses.intersection(addresses):
+            candidates.append(host)
+
+    if len(candidates) != 1:
+        LOG.info(
+            "Storage domain %s (%s) address=%s maps to %d UP hosts on %s; "
+            "Engine will select ImageTransfer host",
+            getattr(storage_domain, "name", storage_domain_id),
+            storage_domain_id,
+            storage_address,
+            len(candidates),
+            network_name,
+        )
+        return None
+
+    host = candidates[0]
+    LOG.info(
+        "Auto-selected ImageTransfer host %s (%s) for storage domain %s "
+        "(%s, address=%s)",
+        host.name,
+        host.id,
+        getattr(storage_domain, "name", storage_domain_id),
+        storage_domain_id,
+        storage_address,
+    )
+    return types.Host(id=host.id)
+
+
+@contextmanager
+def imageio_http_read_timeout(cp):
+    """
+    Override ovirt-imageio's HTTP backend read timeout for this native process.
+
+    ovirt-imageio currently defaults to 60 seconds and its public download/
+    upload helpers do not expose read_timeout. Large-image EXTENTS requests can
+    legitimately take longer, so apply our configured timeout only while the
+    client operation is running. Worker clones inherit the backend timeout.
+    """
+    timeout = cp.getint(
+        "config",
+        "imageio_http_read_timeout",
+        fallback=300,
+    )
+    if timeout < 10 or timeout > 3600:
+        raise RuntimeError(
+            "imageio_http_read_timeout must be between 10 and 3600 seconds"
+        )
+
+    original_init = imageio_http_backend.Backend.__init__
+    signature = inspect.signature(original_init)
+    if "read_timeout" not in signature.parameters:
+        LOG.warning(
+            "Installed ovirt-imageio HTTP backend has no read_timeout "
+            "parameter; cannot override its socket read timeout"
+        )
+        yield
+        return
+
+    def patched_init(backend, *args, **kwargs):
+        kwargs.setdefault("read_timeout", timeout)
+        return original_init(backend, *args, **kwargs)
+
+    LOG.info(
+        "ImageIO HTTP read timeout: %d seconds "
+        "(upstream default is 60 seconds)",
+        timeout,
+    )
+    imageio_http_backend.Backend.__init__ = patched_init
+    try:
+        yield
+    finally:
+        imageio_http_backend.Backend.__init__ = original_init
+
+
+@contextmanager
+def temporary_dns_override(hostname, address):
+    if not hostname or not address:
+        yield
+        return
+
+    original = socket.getaddrinfo
+    expected = hostname.rstrip(".").lower()
+
+    def routed_getaddrinfo(host, *args, **kwargs):
+        value = host.decode() if isinstance(host, bytes) else str(host)
+        if value.rstrip(".").lower() == expected:
+            return original(address, *args, **kwargs)
+        return original(host, *args, **kwargs)
+
+    socket.getaddrinfo = routed_getaddrinfo
+    try:
+        yield
+    finally:
+        socket.getaddrinfo = original
+
+
+def destination_preflight(cp):
+    raw = cp.get("config", "backup_path", fallback="")
+    if not raw:
+        raise RuntimeError(
+            "backup_path is required. Use a normal filesystem/NFS mount, "
+            "not an oVirt Export Domain directory."
+        )
+
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        raise RuntimeError("backup_path must be absolute")
+    if not path.is_dir():
+        raise RuntimeError(
+            "backup_path must already exist: %s. It is not created automatically "
+            "to avoid writing locally when an NFS mount is missing." % path
+        )
+
+    must_mount = cp.getboolean(
+        "config", "backup_path_must_be_mount", fallback=True
+    )
+    if must_mount and not os.path.ismount(str(path)):
+        raise RuntimeError(
+            "backup_path_must_be_mount=True but %s is not a mount point" % path
+        )
+
+    probe = path / (".ovirt-backup-write-test-%d" % os.getpid())
+    try:
+        with open(probe, "wb") as fh:
+            fh.write(b"ok\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+    finally:
+        try:
+            probe.unlink()
+        except FileNotFoundError:
+            pass
+
+    return path
+
+
+def select_vm_names(system, cp, override):
+    if override is not None:
+        return json.loads(override)
+
+    vms = system.vms_service()
+
+    if cp.getboolean("config", "all_vms", fallback=False):
+        return [vm.name for vm in vms.list(max=MAX_VMS)]
+
+    tag = cp.get("config", "vm_tag", fallback="").strip().strip('"')
+    if tag:
+        return [
+            vm.name
+            for vm in vms.list(max=MAX_VMS, search="tag=%s" % tag)
+        ]
+
+    skip = set(cfg_json(cp, "vm_names_skip", []))
+    if skip:
+        return [
+            vm.name for vm in vms.list(max=MAX_VMS)
+            if vm.name not in skip
+        ]
+
+    return cfg_json(cp, "vm_names", [])
+
+
+def find_vm(vms_service, name):
+    matches = vms_service.list(search="name=%s" % name)
+    exact = [vm for vm in matches if vm.name == name]
+    if not exact:
+        raise RuntimeError("VM %r not found" % name)
+    if len(exact) != 1:
+        raise RuntimeError("VM name %r is not unique" % name)
+    return exact[0]
+
+
+def collect_nics(system, vm_service):
+    profiles = {
+        profile.id: profile
+        for profile in system.vnic_profiles_service().list()
+    }
+
+    result = []
+    for nic in vm_service.nics_service().list():
+        mac = getattr(getattr(nic, "mac", None), "address", None)
+        profile_ref = getattr(nic, "vnic_profile", None)
+        profile_id = getattr(profile_ref, "id", None) if profile_ref else None
+        profile = profiles.get(profile_id) if profile_id else None
+        result.append({
+            "id": getattr(nic, "id", None),
+            "name": getattr(nic, "name", None),
+            "mac": mac,
+            "interface": str(getattr(nic, "interface", None))
+            if getattr(nic, "interface", None) is not None else None,
+            "plugged": getattr(nic, "plugged", None),
+            "linked": getattr(nic, "linked", None),
+            "vnic_profile_id": profile_id,
+            "vnic_profile_name": getattr(profile, "name", None)
+            if profile is not None else getattr(profile_ref, "name", None),
+        })
+    return result
+
+
+def disk_storage_domain_ids(connection, disk):
+    """
+    Resolve storage domains without relying on DiskService.get(follow=...).
+
+    Older Engine/SDK combinations can fail that query with an HTML response.
+    Prefer links already present on Disk, then fall back to the disk profile,
+    which is bound to a storage domain in the oVirt API model.
+    """
+    disk_id = getattr(disk, "id", None)
+
+    ids = {
+        getattr(ref, "id", None)
+        for ref in (getattr(disk, "storage_domains", None) or [])
+        if getattr(ref, "id", None)
+    }
+    if ids:
+        result = sorted(ids)
+        LOG.info(
+            "Disk %s storage domains resolved from disk.storage_domains: %r",
+            disk_id,
+            result,
+        )
+        return result
+
+    singular = getattr(disk, "storage_domain", None)
+    singular_id = getattr(singular, "id", None)
+    if singular_id:
+        LOG.info(
+            "Disk %s storage domain resolved from disk.storage_domain: %s",
+            disk_id,
+            singular_id,
+        )
+        return [singular_id]
+
+    profile_ref = getattr(disk, "disk_profile", None)
+    profile_id = getattr(profile_ref, "id", None)
+    if not profile_id:
+        LOG.warning(
+            "Disk %s exposes neither storage domain links nor disk profile",
+            disk_id,
+        )
+        return []
+
+    try:
+        profile = connection.follow_link(profile_ref)
+    except Exception as exc:
+        LOG.warning(
+            "Cannot follow disk profile %s for disk %s (%s); "
+            "trying DiskProfilesService",
+            profile_id,
+            disk_id,
+            exc,
+        )
+        try:
+            profile = (
+                connection.system_service()
+                .disk_profiles_service()
+                .disk_profile_service(profile_id)
+                .get()
+            )
+        except Exception as exc2:
+            LOG.warning(
+                "Cannot resolve disk profile %s for disk %s: %s",
+                profile_id,
+                disk_id,
+                exc2,
+            )
+            return []
+
+    storage_ref = getattr(profile, "storage_domain", None)
+    storage_id = getattr(storage_ref, "id", None)
+    if storage_id:
+        LOG.info(
+            "Disk %s storage domain resolved via disk profile %s: %s",
+            disk_id,
+            profile_id,
+            storage_id,
+        )
+        return [storage_id]
+
+    LOG.warning(
+        "Disk profile %s for disk %s has no storage_domain link",
+        profile_id,
+        disk_id,
+    )
+    return []
+
+
+def select_disks(connection, system, vm_service, cp):
+    bootable_only = cp.getboolean("config", "bootable_only", fallback=False)
+    include_inactive = cp.getboolean(
+        "config", "with_disks_deactivated", fallback=False
+    )
+    exclude = set(cfg_json(cp, "disks_id_exclude", []))
+
+    selected = []
+    for att in vm_service.disk_attachments_service().list():
+        disk_id = att.disk.id
+
+        if disk_id in exclude:
+            LOG.info("Excluded disk: %s", disk_id)
+            continue
+        if bootable_only and not att.bootable:
+            continue
+        if not include_inactive and not att.active:
+            LOG.info("Skipping deactivated disk: %s", disk_id)
+            continue
+
+        selected.append(att)
+        if bootable_only:
+            break
+
+    if not selected:
+        raise RuntimeError("No disks selected")
+
+    inactive = [att.disk.id for att in selected if not att.active]
+    if inactive:
+        raise RuntimeError(
+            "Native VM Backup API requires selected disks to be active/plugged: %s"
+            % ", ".join(inactive)
+        )
+
+    api_disks = []
+    metadata = []
+    disks_service = system.disks_service()
+
+    for att in selected:
+        disk_id = att.disk.id
+        try:
+            # Disk attachment contains a link to the full disk resource.
+            # connection.follow_link() is compatible with older Engine/API
+            # versions where DiskService.get(follow="storage_domains") may
+            # return a non-XML error page.
+            disk = connection.follow_link(att.disk)
+        except Exception as exc:
+            LOG.warning(
+                "Cannot follow disk link for %s (%s); "
+                "falling back to DiskService.get()",
+                disk_id,
+                exc,
+            )
+            disk = disks_service.disk_service(disk_id).get()
+        api_disks.append(types.Disk(id=disk_id))
+        metadata.append({
+            "id": disk_id,
+            "name": getattr(disk, "name", None),
+            "alias": getattr(disk, "alias", None),
+            "bootable": bool(att.bootable),
+            "active": bool(att.active),
+            "interface": str(att.interface) if att.interface else None,
+            "provisioned_size": getattr(disk, "provisioned_size", None),
+            "actual_size": getattr(disk, "actual_size", None),
+            "format": str(disk.format) if getattr(disk, "format", None) else None,
+            "sparse": getattr(disk, "sparse", None),
+            "storage_domain_ids": disk_storage_domain_ids(
+                connection, disk
+            ),
+        })
+
+    return api_disks, metadata
+
+
+def free_bytes(path):
+    st = os.statvfs(str(path))
+    return st.f_bavail * st.f_frsize
+
+
+def check_destination_space(path, disks, cp):
+    threshold = cp.getfloat(
+        "config", "storage_space_threshold", fallback=0.1
+    )
+    provisioned = sum(d.get("provisioned_size") or 0 for d in disks)
+    required = int(provisioned * (1.0 + max(0.0, threshold)))
+    available = free_bytes(path)
+
+    LOG.info(
+        "Destination free: %.2f GiB; conservative required: %.2f GiB",
+        available / 1024**3,
+        required / 1024**3,
+    )
+    if required and available < required:
+        raise RuntimeError(
+            "Not enough destination space: need %.2f GiB, have %.2f GiB"
+            % (required / 1024**3, available / 1024**3)
+        )
+
+
+def wait_backup(backup_service, backup, wanted, timeout):
+    started = time.monotonic()
+    last = None
+    while backup.phase != wanted:
+        if backup.phase == types.BackupPhase.FAILED:
+            raise RuntimeError("Engine backup %s failed" % backup.id)
+        if backup.phase != last:
+            LOG.info("Backup %s phase: %s", backup.id, backup.phase)
+            last = backup.phase
+        if time.monotonic() - started > timeout:
+            raise RuntimeError(
+                "Timeout waiting for backup %s: phase=%s"
+                % (backup.id, backup.phase)
+            )
+        time.sleep(1)
+        backup = backup_service.get()
+    return backup
+
+
+def _extract_ovf(source):
+    try:
+        return source.initialization.configuration.data
+    except (AttributeError, TypeError):
+        return None
+
+
+def save_ovf(vms_service, vm_service, vm_id, backup, target):
+    snapshot_id = getattr(getattr(backup, "snapshot", None), "id", None)
+    ovf = None
+    ovf_source = None
+
+    if snapshot_id:
+        try:
+            source = (
+                vm_service.snapshots_service()
+                .snapshot_service(snapshot_id)
+                .get(all_content=True)
+            )
+            ovf = _extract_ovf(source)
+            if ovf:
+                ovf_source = "backup_snapshot_native_ovirt"
+                LOG.info("Using OVF from backup snapshot %s", snapshot_id)
+            else:
+                LOG.warning(
+                    "Backup snapshot %s returned no OVF; "
+                    "falling back to current VM OVF",
+                    snapshot_id,
+                )
+        except Exception:
+            LOG.exception(
+                "Cannot read backup snapshot OVF; falling back to current VM OVF"
+            )
+
+    if not ovf:
+        # Official oVirt SDK backup examples fetch native oVirt OVF from the
+        # VMs collection with all_content=True. Do not use ovf_as_ova here:
+        # that produces OVA-style OVF which Engine's ConfigurationType.OVF
+        # restore path does not parse as native oVirt OVF.
+        matches = vms_service.list(
+            search="id=%s" % vm_id,
+            all_content=True,
+        )
+        exact = [item for item in matches if item.id == vm_id]
+        if exact:
+            ovf = _extract_ovf(exact[0])
+            if ovf:
+                ovf_source = "current_vm_native_ovirt"
+
+    if not ovf:
+        LOG.warning("Engine returned no native oVirt OVF data")
+        return snapshot_id, False, None
+
+    data = ovf if isinstance(ovf, bytes) else str(ovf).encode("utf-8")
+    with open(target, "wb") as fh:
+        fh.write(data)
+        fh.flush()
+        os.fsync(fh.fileno())
+
+    LOG.info(
+        "Saved VM OVF: %s (%d bytes), source=%s",
+        target,
+        len(data),
+        ovf_source,
+    )
+    return snapshot_id, True, ovf_source
+
+
+class LogProgress:
+    def __init__(self, disk_id, interval=10, percent_step=5):
+        self.disk_id = disk_id
+        self.interval = max(1, int(interval))
+        self.percent_step = max(1, int(percent_step))
+        self._size = None
+        self._done = 0
+        self._created = time.monotonic()
+        self._started = None
+        self._last_log = self._created
+        self._last_done = 0
+        self._last_percent = -self.percent_step
+        self._lock = threading.Lock()
+
+    @property
+    def size(self):
+        return self._size
+
+    @size.setter
+    def size(self, value):
+        with self._lock:
+            self._size = value
+            now = time.monotonic()
+            if self._started is None:
+                self._started = now
+                self._last_log = now
+            if value:
+                LOG.info(
+                    "ImageIO metadata/extents ready for disk %s after %.1fs; "
+                    "download size: %.2f GiB",
+                    self.disk_id,
+                    now - self._created,
+                    value / 1024**3,
+                )
+
+    def update(self, amount):
+        with self._lock:
+            self._done += amount
+            now = time.monotonic()
+            if self._started is None:
+                self._started = now
+                self._last_log = now
+            elapsed = max(now - self._started, 0.001)
+            average_rate = self._done / elapsed
+
+            percent = None
+            if self._size:
+                percent = min(100.0, self._done * 100.0 / self._size)
+
+            due_time = now - self._last_log >= self.interval
+            due_percent = (
+                percent is not None
+                and percent >= self._last_percent + self.percent_step
+            )
+            finished = percent is not None and percent >= 100.0
+
+            if not (due_time or due_percent or finished):
+                return
+
+            interval_elapsed = max(now - self._last_log, 0.001)
+            interval_done = max(self._done - self._last_done, 0)
+            current_rate = interval_done / interval_elapsed
+
+            if self._size:
+                remaining = max(self._size - self._done, 0)
+                eta = remaining / average_rate if average_rate > 0 else 0
+                LOG.info(
+                    "Download progress disk %s: %.1f%%, %.2f/%.2f GiB, "
+                    "current %.1f MiB/s, avg %.1f MiB/s, ETA %ds",
+                    self.disk_id,
+                    percent,
+                    self._done / 1024**3,
+                    self._size / 1024**3,
+                    current_rate / 1024**2,
+                    average_rate / 1024**2,
+                    int(eta),
+                )
+                self._last_percent = int(percent // self.percent_step) * self.percent_step
+            else:
+                LOG.info(
+                    "Download progress disk %s: %.2f GiB, "
+                    "current %.1f MiB/s, avg %.1f MiB/s",
+                    self.disk_id,
+                    self._done / 1024**3,
+                    current_rate / 1024**2,
+                    average_rate / 1024**2,
+                )
+
+            self._last_done = self._done
+            self._last_log = now
+
+
+def create_transfer(connection, backup_id, disk_id, cp):
+    system = connection.system_service()
+    transfers = system.image_transfers_service()
+    policy = cp.get(
+        "config", "imageio_timeout_policy", fallback="cancel"
+    )
+    timeout = cp.getint("config", "imageio_timeout", fallback=120)
+    inactivity_timeout = cp.getint(
+        "config", "imageio_inactivity_timeout", fallback=300
+    )
+    if inactivity_timeout < 60 or inactivity_timeout > 3600:
+        raise RuntimeError(
+            "imageio_inactivity_timeout must be between 60 and 3600 seconds"
+        )
+
+    # For live VM Backup, Engine owns the backup host and backup URL.
+    # Do not force a transfer host based on storage.address: the disk data is
+    # exposed by the VM backup host, which can legitimately differ from the
+    # NFS/storage server hosting the storage domain.
+    transfer = transfers.add(
+        types.ImageTransfer(
+            disk=types.Disk(id=disk_id),
+            backup=types.Backup(id=backup_id),
+            direction=types.ImageTransferDirection.DOWNLOAD,
+            format=types.DiskFormat.RAW,
+            inactivity_timeout=inactivity_timeout,
+            timeout_policy=types.ImageTransferTimeoutPolicy(policy),
+        )
+    )
+    LOG.info(
+        "ImageTransfer %s created for disk %s with inactivity_timeout=%ds "
+        "timeout_policy=%s",
+        transfer.id,
+        disk_id,
+        inactivity_timeout,
+        policy,
+    )
+    service = transfers.image_transfer_service(transfer.id)
+    started = time.monotonic()
+
+    while True:
+        time.sleep(1)
+        transfer = service.get()
+
+        if transfer.phase == types.ImageTransferPhase.TRANSFERRING:
+            host_id = getattr(getattr(transfer, "host", None), "id", None)
+            host_name = None
+            host_address = None
+            if host_id:
+                try:
+                    host = (
+                        connection.system_service()
+                        .hosts_service()
+                        .host_service(host_id)
+                        .get()
+                    )
+                    host_name = getattr(host, "name", None)
+                    host_address = getattr(host, "address", None)
+                except Exception:
+                    LOG.exception(
+                        "Cannot resolve ImageTransfer host %s", host_id
+                    )
+
+            def endpoint(value):
+                if not value:
+                    return None
+                parsed = urlsplit(value)
+                if parsed.hostname is None:
+                    return None
+                return "%s:%s" % (
+                    parsed.hostname,
+                    parsed.port or ("443" if parsed.scheme == "https" else ""),
+                )
+
+            LOG.info(
+                "ImageTransfer %s ready for disk %s: host=%s (%s, %s) "
+                "transfer_endpoint=%s proxy_endpoint=%s",
+                transfer.id,
+                disk_id,
+                host_id,
+                host_name,
+                host_address,
+                endpoint(getattr(transfer, "transfer_url", None)),
+                endpoint(getattr(transfer, "proxy_url", None)),
+            )
+            return transfer
+
+        if transfer.phase == types.ImageTransferPhase.FINISHED_FAILURE:
+            raise RuntimeError("ImageTransfer %s failed" % transfer.id)
+
+        if transfer.phase == types.ImageTransferPhase.PAUSED_SYSTEM:
+            try:
+                service.cancel()
+            finally:
+                raise RuntimeError("ImageTransfer %s paused by system" % transfer.id)
+
+        if transfer.phase != types.ImageTransferPhase.INITIALIZING:
+            try:
+                service.cancel()
+            finally:
+                raise RuntimeError(
+                    "Unexpected ImageTransfer phase %s for %s"
+                    % (transfer.phase, transfer.id)
+                )
+
+        if time.monotonic() - started > timeout:
+            try:
+                service.cancel()
+            finally:
+                raise RuntimeError(
+                    "Timeout initializing ImageTransfer %s" % transfer.id
+                )
+
+
+def cancel_transfer_and_wait(connection, transfer_id, cp):
+    """
+    Cancel a failed ImageTransfer and wait until Engine no longer considers it
+    active before the owning VM backup is finalized.
+
+    On newer Engine versions a finished transfer entity may remain in the
+    database for cleanup, so FINISHED_* is sufficient; older versions remove
+    the transfer and return 404.
+    """
+    timeout = cp.getint("config", "imageio_timeout", fallback=120)
+    service = (
+        connection.system_service()
+        .image_transfers_service()
+        .image_transfer_service(transfer_id)
+    )
+
+    try:
+        service.cancel()
+    except sdk.NotFoundError:
+        LOG.info("ImageTransfer %s already removed", transfer_id)
+        return True
+    except Exception:
+        LOG.exception("Cannot cancel failed ImageTransfer %s", transfer_id)
+        return False
+
+    started = time.monotonic()
+    last_phase = None
+
+    while True:
+        time.sleep(1)
+        try:
+            current = service.get()
+        except sdk.NotFoundError:
+            LOG.info("ImageTransfer %s removed after cancel", transfer_id)
+            return True
+        except Exception:
+            LOG.exception(
+                "Cannot query ImageTransfer %s after cancel", transfer_id
+            )
+            return False
+
+        phase = getattr(current, "phase", None)
+        if phase != last_phase:
+            LOG.info(
+                "Waiting for cancelled ImageTransfer %s: phase=%s",
+                transfer_id,
+                phase,
+            )
+            last_phase = phase
+
+        if phase in (
+            types.ImageTransferPhase.FINISHED_SUCCESS,
+            types.ImageTransferPhase.FINISHED_FAILURE,
+        ):
+            LOG.info(
+                "ImageTransfer %s is no longer active: phase=%s",
+                transfer_id,
+                phase,
+            )
+            return True
+
+        if time.monotonic() - started > timeout:
+            LOG.error(
+                "Timeout waiting for cancelled ImageTransfer %s to stop; "
+                "last phase=%s",
+                transfer_id,
+                phase,
+            )
+            return False
+
+
+def finalize_transfer(connection, transfer, disk_id, cp):
+    timeout = cp.getint("config", "imageio_timeout", fallback=120)
+    service = (
+        connection.system_service()
+        .image_transfers_service()
+        .image_transfer_service(transfer.id)
+    )
+    service.finalize()
+    started = time.monotonic()
+
+    while True:
+        time.sleep(1)
+        try:
+            current = service.get()
+        except sdk.NotFoundError:
+            disk = (
+                connection.system_service()
+                .disks_service()
+                .disk_service(disk_id)
+                .get()
+            )
+            if disk.status == types.DiskStatus.OK:
+                return
+            raise RuntimeError(
+                "Transfer %s disappeared; disk %s status=%s"
+                % (transfer.id, disk_id, disk.status)
+            )
+
+        if current.phase == types.ImageTransferPhase.FINISHED_SUCCESS:
+            return
+        if current.phase == types.ImageTransferPhase.FINISHED_FAILURE:
+            raise RuntimeError(
+                "ImageTransfer %s failed while finalizing" % transfer.id
+            )
+        if time.monotonic() - started > timeout:
+            raise RuntimeError(
+                "Timeout finalizing ImageTransfer %s" % transfer.id
+            )
+
+
+def download_disk(connection, backup, disk, disk_dir, cp):
+    disk_id = disk.id
+    # FULL backups are stored as sparse RAW. This avoids qcow2 random-read
+    # amplification over NFS during restore. Incremental backups require qcow2
+    # and are intentionally outside the current FULL-only backup scheme.
+    target = disk_dir / ("%s.raw" % disk_id)
+    transfer = create_transfer(
+        connection,
+        backup.id,
+        disk_id,
+        cp,
+    )
+    download_started = time.monotonic()
+
+    try:
+        kwargs = {
+            "fmt": "raw",
+            "secure": cp.getboolean("config", "verify_tls", fallback=True),
+            "buffer_size": imageio_client.BUFFER_SIZE,
+            "max_workers": cp.getint(
+                "config", "imageio_max_workers", fallback=4
+            ),
+        }
+        transfer_url, dns_host, dns_ip = imageio_network_route(
+            connection, transfer, cp
+        )
+
+        signature = inspect.signature(imageio_client.download)
+        if "proxy_url" in signature.parameters:
+            kwargs["proxy_url"] = (
+                None
+                if dns_ip
+                else getattr(transfer, "proxy_url", None)
+            )
+        if "progress" in signature.parameters:
+            kwargs["progress"] = LogProgress(
+                disk_id,
+                interval=cp.getint(
+                    "config", "imageio_progress_interval", fallback=10
+                ),
+                percent_step=cp.getint(
+                    "config", "imageio_progress_percent", fallback=5
+                ),
+            )
+
+        LOG.info("Downloading disk %s -> %s", disk_id, target)
+        with imageio_http_read_timeout(cp):
+            with temporary_dns_override(dns_host, dns_ip):
+                imageio_client.download(
+                    transfer_url,
+                    str(target),
+                    cp.get(
+                        "config",
+                        "ca_file",
+                        fallback="/etc/pki/ovirt-engine/ca.pem",
+                    ),
+                    **kwargs
+                )
+    except Exception:
+        LOG.exception(
+            "Download failed for disk %s; cancelling ImageTransfer %s",
+            disk_id,
+            transfer.id,
+        )
+        cancel_transfer_and_wait(
+            connection,
+            transfer.id,
+            cp,
+        )
+        raise
+    else:
+        finalize_transfer(connection, transfer, disk_id, cp)
+
+    download_seconds = time.monotonic() - download_started
+
+    info = json.loads(
+        subprocess.check_output(
+            ["qemu-img", "info", "--output=json", str(target)],
+            text=True,
+        )
+    )
+    if info.get("format") != "raw":
+        raise RuntimeError(
+            "FULL backup disk %s was requested as RAW but qemu-img reports %r"
+            % (disk_id, info.get("format"))
+        )
+    if not info.get("virtual-size"):
+        raise RuntimeError(
+            "FULL backup RAW disk %s has invalid virtual size" % disk_id
+        )
+    LOG.info(
+        "Validated sparse RAW backup disk %s with qemu-img info", disk_id
+    )
+
+    LOG.info(
+        "Disk %s completed: virtual=%.2f GiB actual=%.2f GiB "
+        "download_time=%.1fs",
+        disk_id,
+        (info.get("virtual-size") or 0) / 1024**3,
+        (info.get("actual-size") or 0) / 1024**3,
+        download_seconds,
+    )
+
+    return {
+        "id": disk_id,
+        "file": "disks/%s" % target.name,
+        "format": info.get("format"),
+        "virtual_size": info.get("virtual-size"),
+        "actual_size": info.get("actual-size"),
+        "transfer_id": transfer.id,
+        "download_seconds": round(download_seconds, 3),
+    }
+
+
+def write_manifest(path, data):
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2, sort_keys=True, default=str)
+        fh.write("\n")
+
+
+def cleanup_retention(vm_dir, cp):
+    completed = sorted(
+        p for p in vm_dir.iterdir()
+        if p.is_dir()
+        and not p.name.endswith(".partial")
+        and ".failed-" not in p.name
+    )
+
+    days_raw = cp.get("config", "backup_keep_count", fallback="").strip()
+    if days_raw:
+        cutoff = dt.datetime.now() - dt.timedelta(days=int(days_raw))
+        for path in list(completed):
+            try:
+                stamp = dt.datetime.strptime(path.name, "%Y%m%d_%H%M%S")
+            except ValueError:
+                continue
+            if stamp < cutoff:
+                LOG.info("Retention deleting by age: %s", path)
+                shutil.rmtree(path)
+                completed.remove(path)
+
+    count_raw = cp.get(
+        "config", "backup_keep_count_by_number", fallback=""
+    ).strip()
+    if count_raw:
+        keep = int(count_raw)
+        completed.sort(key=lambda p: p.name)
+        while len(completed) > keep:
+            path = completed.pop(0)
+            LOG.info("Retention deleting by count: %s", path)
+            shutil.rmtree(path)
+
+
+def backup_vm(connection, base, vm_name, cp, dry_run):
+    vm_started = time.monotonic()
+    system = connection.system_service()
+    vms = system.vms_service()
+    vm = find_vm(vms, vm_name)
+    vm_service = vms.vm_service(vm.id)
+
+    api_disks, disk_meta = select_disks(
+        connection, system, vm_service, cp
+    )
+    LOG.info("Start native FULL backup for: %s", vm_name)
+    for disk in disk_meta:
+        storage_ids = disk.get("storage_domain_ids") or []
+        LOG.info(
+            "Selected disk %s bootable=%s provisioned=%.2f GiB "
+            "storage_domains=%r",
+            disk["id"],
+            disk["bootable"],
+            (disk["provisioned_size"] or 0) / 1024**3,
+            storage_ids,
+        )
+
+        LOG.info(
+            "Live backup disk %s source storage_domains=%r; "
+            "Engine will use the VM backup host for ImageTransfer",
+            disk["id"],
+            storage_ids,
+        )
+
+    check_destination_space(base, disk_meta, cp)
+
+    if dry_run:
+        LOG.info("Dry-run: no backup API call for %s", vm_name)
+        return
+
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    vm_dir = base / vm_name
+    vm_dir.mkdir(parents=True, exist_ok=True)
+    work = vm_dir / (stamp + ".partial")
+    final = vm_dir / stamp
+
+    if work.exists() or final.exists():
+        raise RuntimeError("Backup directory already exists for %s" % stamp)
+
+    work.mkdir()
+    disks_dir = work / "disks"
+    disks_dir.mkdir()
+
+    manifest = {
+        "schema": 1,
+        "type": "full",
+        "status": "running",
+        "vm_name": vm.name,
+        "vm_id": vm.id,
+        "created_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "selected_disks": disk_meta,
+        "nics": collect_nics(system, vm_service),
+        "files": [],
+    }
+    write_manifest(work / "manifest.json", manifest)
+
+    backup = None
+    backup_service = None
+    finalize_requested = False
+
+    try:
+        backups = vm_service.backups_service()
+        backup = backups.add(
+            types.Backup(
+                disks=api_disks,
+                description="oVirtBackup native FULL %s" % stamp,
+            ),
+            require_consistency=cp.getboolean(
+                "config", "require_consistency", fallback=False
+            ),
+            use_active=False,
+        )
+        backup_service = backups.backup_service(backup.id)
+        LOG.info("Engine backup ID: %s", backup.id)
+
+        operation_timeout = cp.getint(
+            "config", "backup_operation_timeout", fallback=3600
+        )
+        backup = wait_backup(
+            backup_service,
+            backup,
+            types.BackupPhase.READY,
+            operation_timeout,
+        )
+        LOG.info("Engine backup %s READY", backup.id)
+
+        backup_host_id = getattr(
+            getattr(backup, "host", None),
+            "id",
+            None,
+        )
+        if backup_host_id:
+            try:
+                backup_host = (
+                    system.hosts_service()
+                    .host_service(backup_host_id)
+                    .get()
+                )
+                LOG.info(
+                    "Live VM backup host: %s (%s)",
+                    getattr(backup_host, "name", backup_host_id),
+                    backup_host_id,
+                )
+                manifest["backup_host_id"] = backup_host_id
+                manifest["backup_host_name"] = getattr(
+                    backup_host,
+                    "name",
+                    None,
+                )
+            except Exception:
+                LOG.exception(
+                    "Cannot resolve live VM backup host %s",
+                    backup_host_id,
+                )
+                manifest["backup_host_id"] = backup_host_id
+
+        manifest["backup_id"] = backup.id
+        manifest["from_checkpoint_id"] = getattr(
+            backup, "from_checkpoint_id", None
+        )
+        manifest["to_checkpoint_id"] = getattr(
+            backup, "to_checkpoint_id", None
+        )
+
+        snapshot_id, ovf_saved, ovf_source = save_ovf(
+            vms, vm_service, vm.id, backup, work / "vm.ovf"
+        )
+        manifest["snapshot_id"] = snapshot_id
+        manifest["ovf_saved"] = ovf_saved
+        manifest["ovf_source"] = ovf_source
+        write_manifest(work / "manifest.json", manifest)
+
+        backup_disks = backup_service.disks_service().list()
+        wanted = {d.id for d in api_disks}
+        returned = {d.id for d in backup_disks}
+        if wanted != returned:
+            raise RuntimeError(
+                "Engine backup disk set differs: requested=%s returned=%s"
+                % (sorted(wanted), sorted(returned))
+            )
+
+        disk_meta_by_id = {
+            item["id"]: item for item in disk_meta
+        }
+
+        for disk in backup_disks:
+            source_meta = disk_meta_by_id.get(disk.id) or {}
+            storage_ids = source_meta.get("storage_domain_ids") or []
+            LOG.info(
+                "Downloading backup disk %s source storage_domains=%r "
+                "via Engine-selected live backup host",
+                disk.id,
+                storage_ids,
+            )
+
+            manifest["files"].append(
+                download_disk(
+                    connection,
+                    backup,
+                    disk,
+                    disks_dir,
+                    cp,
+                )
+            )
+            write_manifest(work / "manifest.json", manifest)
+
+        backup_service.finalize()
+        finalize_requested = True
+        backup = wait_backup(
+            backup_service,
+            backup,
+            types.BackupPhase.SUCCEEDED,
+            operation_timeout,
+        )
+
+        manifest["status"] = "complete"
+        manifest["completed_utc"] = dt.datetime.now(
+            dt.timezone.utc
+        ).isoformat()
+        manifest["duration_seconds"] = round(
+            time.monotonic() - vm_started, 3
+        )
+        write_manifest(work / "manifest.json", manifest)
+
+        os.rename(work, final)
+        LOG.info(
+            "Backup complete for %s: %s (%.1fs)",
+            vm_name,
+            final,
+            manifest["duration_seconds"],
+        )
+        cleanup_retention(vm_dir, cp)
+
+    except Exception:
+        manifest["status"] = "failed"
+        manifest["failed_utc"] = dt.datetime.now(
+            dt.timezone.utc
+        ).isoformat()
+        try:
+            write_manifest(work / "manifest.json", manifest)
+        except Exception:
+            LOG.exception("Cannot update failed manifest")
+
+        if backup_service is not None and not finalize_requested:
+            try:
+                backup_service.finalize()
+            except Exception:
+                LOG.exception(
+                    "Cannot finalize Engine backup %s after failure",
+                    getattr(backup, "id", None),
+                )
+
+        if work.exists():
+            failed = vm_dir / (
+                stamp + ".failed-" + time.strftime("%H%M%S")
+            )
+            try:
+                os.rename(work, failed)
+                LOG.error("Incomplete backup kept at %s", failed)
+            except Exception:
+                LOG.exception("Cannot rename incomplete backup")
+        raise
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Native oVirt FULL backup via VM Backup API"
+    )
+    parser.add_argument("-c", "--config-file", required=True)
+    parser.add_argument("-d", "--debug", action="store_true")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Read-only preflight; do not start Engine backup",
+    )
+    parser.add_argument(
+        "--vm-names",
+        help='Override VM list as JSON, e.g. ["1c-linux"]',
+    )
+    args = parser.parse_args()
+
+    cp = load_config(args.config_file)
+    configure_logging(cp, args.debug)
+    base = destination_preflight(cp)
+
+    config_dry = cp.getboolean("config", "dry_run", fallback=False)
+    dry_run = args.dry_run or config_dry
+
+    operation_lock = acquire_operation_lock("native-backup")
+    connection = connect(cp)
+    failures = []
+    try:
+        system = connection.system_service()
+        names = select_vm_names(system, cp, args.vm_names)
+        if not names:
+            raise RuntimeError("No VMs selected")
+
+        LOG.info("Native backup destination: %s", base)
+        LOG.info("Selected VMs: %s", ", ".join(names))
+
+        for name in names:
+            try:
+                backup_vm(connection, base, name, cp, dry_run)
+            except Exception as exc:
+                failures.append((name, str(exc)))
+                LOG.exception("Backup failed for %s", name)
+
+        if failures:
+            LOG.error("Completed with %d failure(s)", len(failures))
+            for name, error in failures:
+                LOG.error("  %s: %s", name, error)
+            return 1
+
+        LOG.info("All native backups completed successfully")
+        return 0
+    finally:
+        connection.close()
+        release_operation_lock(operation_lock)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

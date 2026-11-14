@@ -1,0 +1,1342 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>oVirt Backup Console</title>
+<style>
+:root{
+  color-scheme:dark;
+  --header-height:64px;--nav-height:0px;--sticky-top:calc(var(--header-height) + var(--nav-height));
+  --bg:#0f131a;--panel:#171d27;--panel2:#1d2531;--line:#2b3645;
+  --text:#e9eef5;--muted:#94a3b8;--good:#45c486;--warn:#f0b44d;
+  --bad:#ef6b73;--accent:#6ea8fe;--shadow:0 14px 36px rgba(0,0,0,.23)
+}
+*{box-sizing:border-box}
+body{margin:0;padding-top:var(--header-height);background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+header{height:var(--header-height);display:flex;align-items:center;justify-content:space-between;padding:0 28px;border-bottom:1px solid var(--line);position:fixed;top:0;left:0;right:0;background:rgba(15,19,26,.96);backdrop-filter:blur(10px);z-index:20}
+.brand{font-weight:720;font-size:18px}.brand span{color:var(--accent)}
+.shell{display:grid;grid-template-columns:205px minmax(0,1fr);min-height:calc(100vh - var(--header-height))}
+nav{border-right:1px solid var(--line);padding:22px 12px;position:sticky;top:var(--header-height);height:calc(100vh - var(--header-height));align-self:start;overflow-y:auto}
+nav button{display:block;width:100%;padding:10px 14px;margin:2px 0;border:0;border-radius:8px;background:transparent;color:var(--muted);text-align:left;font:inherit;cursor:pointer}
+nav button.active,nav button:hover{background:var(--panel2);color:var(--text)}
+main{padding:26px;max-width:1600px;width:100%;min-width:0}
+.grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:14px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px;box-shadow:var(--shadow)}
+.card h3{margin:0 0 8px;font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+.big{font-size:24px;font-weight:700}
+.muted{color:var(--muted)}.good{color:var(--good)}.warn{color:var(--warn)}.bad{color:var(--bad)}
+.section{margin-top:18px}.section-title{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:10px}
+.toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+table{width:100%;border-collapse:separate;border-spacing:0;background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow-wrap:anywhere}
+thead th{position:sticky;top:calc(var(--sticky-top) + var(--page-bar-height, 0px));z-index:3;background:var(--panel2)}
+.page-bar{position:sticky;top:var(--sticky-top);z-index:4;background:var(--bg);padding:10px 12px;border-bottom:1px solid var(--line)}
+.page-bar .section-title{margin:0;flex-wrap:wrap}
+.page-bar h2{margin:0}
+.page-bar .notice{margin:8px 0 0;max-height:20vh;overflow:auto}
+.operation-log summary{cursor:pointer;color:var(--muted)}
+.operation-log pre{margin-top:10px;max-height:260px}
+.vm-actions{width:1%;text-align:right;white-space:nowrap}
+#vms th:nth-child(3),#vms th:nth-child(4),#vms th:nth-child(5),
+#vms td:nth-child(3),#vms td:nth-child(4),#vms td:nth-child(5){
+  width:1%;
+  white-space:nowrap;
+}
+@media(max-width:600px){
+  #vms td:nth-child(3),#vms td:nth-child(5),.vm-actions{white-space:normal}
+}
+.backup-table td{vertical-align:middle}
+.backup-table th,.backup-metric{white-space:nowrap}
+.backup-copy strong,.backup-copy .code-id{display:block}
+.backup-copy .code-id{margin-top:3px}
+.backup-checkpoint{margin-top:5px;font-size:12px;color:var(--muted)}
+.backup-checkpoint summary{cursor:pointer;width:max-content}
+.backup-checkpoint code{overflow-wrap:anywhere}
+.backup-actions{text-align:right}
+.backup-action-buttons{display:inline-grid;grid-template-columns:repeat(2,minmax(0,1fr));width:calc(16rem + 6px);max-width:100%;gap:6px}
+.backup-action-buttons .delete-backup-btn:only-child{grid-column:2}
+.backup-action-buttons button{white-space:nowrap}
+.backup-mobile-label{display:none}
+@media(max-width:800px){
+  .backup-table,.backup-table tbody{display:block}
+  .backup-table thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+  .backup-table tbody tr{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px 12px;padding:12px;border-bottom:1px solid var(--line)}
+  .backup-table tbody td{border:0;padding:0}
+  .backup-copy{grid-column:span 2}
+  .backup-state{text-align:right;overflow-wrap:normal}
+  .backup-actions,.backup-empty{grid-column:1/-1}
+  .backup-mobile-label{display:block;color:var(--muted);font-size:11px}
+}
+.vm-backup-flag{width:1%;text-align:center;white-space:nowrap}
+.vm-backup-flag span{font-weight:700}
+.vm-backup-btn{visibility:hidden}
+tr:has(.vm-select:checked){background:var(--panel2)}
+tr:has(.vm-select:checked) .vm-backup-btn{visibility:visible}
+#vmsBody tr:has(.vm-select){cursor:pointer}
+th,td{padding:11px 12px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted)}
+tr:last-child td{border-bottom:0}
+.pill{display:inline-block;padding:3px 8px;border-radius:999px;background:var(--panel2)}
+button.action{border:1px solid var(--line);background:var(--panel2);color:var(--text);padding:8px 11px;border-radius:7px;cursor:pointer}
+button.action:hover{border-color:var(--accent)}
+button.primary{background:var(--accent);border-color:var(--accent);color:#08111f;font-weight:650}
+button.danger{border-color:var(--bad);color:var(--bad)}
+button:disabled{opacity:.45;cursor:not-allowed}
+#logFilter{width:auto}
+pre{white-space:pre-wrap;word-break:break-word;margin:0;background:#0a0d12;border:1px solid var(--line);border-radius:10px;padding:14px;max-height:65vh;overflow:auto;font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace}
+.page{display:none}.page.active{display:block}
+.kv{display:grid;grid-template-columns:260px 1fr;border-bottom:1px solid var(--line);padding:8px 0}
+.row{display:flex;gap:8px;align-items:center}.right{margin-left:auto}
+dialog{background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:12px;padding:20px;max-width:960px;width:92%}
+input,textarea,select{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:8px;background:#0c1118;color:var(--text);font:inherit}
+textarea{min-height:92px;resize:vertical}
+input[type=checkbox]{width:auto;transform:scale(1.1)}
+.settings-group{margin:0 0 18px}
+.settings-grid select[multiple]{min-height:9rem}
+.settings-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.field{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:13px}
+.field-label{display:flex;align-items:center;gap:8px;margin-bottom:7px;font-weight:600}
+.field small{display:block;color:var(--muted);margin-top:6px}
+.field .unit{color:var(--muted);font-weight:400}
+.check-row{display:flex;align-items:center;gap:9px;min-height:38px}
+.notice{padding:10px 12px;border-radius:8px;margin:10px 0;background:var(--panel2);border:1px solid var(--line)}
+.check-card{padding:10px 12px;border:1px solid var(--line);border-radius:8px;margin-bottom:8px;background:var(--panel)}
+.disk{margin-bottom:6px}.disk:last-child{margin-bottom:0}.storage{font-size:12px;color:var(--muted)}
+.code-id{font:12px ui-monospace,SFMono-Regular,Consolas,monospace;color:var(--muted)}
+.spinner{display:inline-block;width:12px;height:12px;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite}
+.scheduler-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
+.weekday-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:8px}
+.weekday-grid label{display:flex;align-items:center;gap:7px;padding:8px 9px;border:1px solid var(--line);border-radius:8px;background:var(--panel2)}
+@media(max-width:1100px){.scheduler-grid{grid-template-columns:repeat(2,1fr)}.weekday-grid{grid-template-columns:repeat(4,1fr)}}
+@media(max-width:600px){.scheduler-grid{grid-template-columns:1fr}.weekday-grid{grid-template-columns:repeat(2,1fr)}}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media(max-width:1100px){.grid{grid-template-columns:repeat(2,1fr)}.settings-grid{grid-template-columns:1fr}}
+@media(max-width:950px){:root{--nav-height:52px}.shell{grid-template-columns:minmax(0,1fr);grid-template-rows:var(--nav-height) minmax(0,1fr)}nav{display:flex;position:sticky;top:var(--header-height);height:var(--nav-height);padding:4px 8px;overflow:auto;border-right:0;border-bottom:1px solid var(--line);background:var(--bg);z-index:10}nav button{width:auto;white-space:nowrap}}
+@media(max-width:600px){header{padding:0 10px;gap:6px}.brand{font-size:15px}header .row{gap:4px}.brand,.page-bar{overflow-wrap:anywhere}main{padding:10px}.grid{grid-template-columns:1fr}.kv{grid-template-columns:1fr}th,td{padding:6px 4px}button.action{padding:6px 8px}}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><span>oVirt</span> <span data-i18n="brand.console">Backup Console</span></div>
+  <div class="row">
+    <span id="consoleVersion" class="pill muted">v…</span>
+    <span id="engineBadge" class="pill muted">Engine …</span>
+    <button class="action" onclick="refreshAll()" data-i18n="action.refresh">Refresh</button>
+    <button id="logoutButton" class="action" onclick="logout()" data-i18n="token.logout" hidden>Sign out</button>
+  </div>
+</header>
+<div class="shell">
+<nav>
+  <button class="active" data-page="dashboard" data-i18n="nav.dashboard">Dashboard</button>
+  <button data-page="vms" data-i18n="nav.vms">Virtual Machines</button>
+  <button data-page="backups" data-i18n="nav.backups">Backups</button>
+  <button data-page="logs" data-i18n="nav.logs">Logs</button>
+  <button data-page="health" data-i18n="nav.health">Health</button>
+  <button data-page="scheduler" data-i18n="nav.scheduler">Scheduler</button>
+  <button data-page="settings" data-i18n="nav.settings">Settings</button>
+</nav>
+<main>
+<section id="dashboard" class="page active">
+  <div class="grid">
+    <div class="card"><h3 data-i18n="dashboard.engine">Engine</h3><div id="engineState" class="big">…</div><div id="engineInfo" class="muted"></div></div>
+    <div class="card"><h3 data-i18n="dashboard.repo_free">Repository free</h3><div id="repoFree" class="big">…</div><div id="repoPath" class="muted"></div></div>
+    <div class="card"><h3 data-i18n="dashboard.last_backup">Last backup</h3><div id="lastBackup" class="big">…</div><div id="lastBackupInfo" class="muted"></div></div>
+    <div class="card"><h3 data-i18n="dashboard.native_lock">Native lock</h3><div id="lockState" class="big">…</div><div id="lockInfo" class="muted"></div></div>
+    <div class="card"><h3 data-i18n="dashboard.scheduler">Scheduler</h3><div id="timerState" class="big">…</div><div id="timerInfo" class="muted"></div></div>
+  </div>
+  <div class="section card">
+    <div class="section-title">
+      <div><h2 style="margin:0" data-i18n="dashboard.manual_operation">Manual operation</h2><div id="operationMeta" class="muted" data-i18n="state.no_console_operation">No console operation</div></div>
+      <span id="operationBadge" class="pill muted" data-i18n="state.idle">Idle</span>
+    </div>
+    <details class="operation-log">
+      <summary data-i18n="dashboard.operation_log">Operation log</summary>
+      <pre id="operationLog" data-i18n="state.no_operation_log">No operation log.</pre>
+    </details>
+  </div>
+  <div class="section">
+    <div class="section-title"><h2 data-i18n="dashboard.recent_backups">Recent backups</h2></div>
+    <table><thead><tr><th>VM</th><th>Created</th><th>Status</th><th>Disks</th><th>Actual</th><th>Backup ID</th></tr></thead><tbody id="recentBody"></tbody></table>
+  </div>
+  <div class="section card"><h3 data-i18n="dashboard.installed_stack">Installed stack</h3><div id="packages"></div></div>
+</section>
+
+<section id="vms" class="page">
+  <div class="page-bar">
+    <div class="section-title">
+      <div><h2 style="margin:0" data-i18n="vms.title">Virtual Machines</h2><span class="muted" data-i18n="vms.subtitle">Engine inventory with disk/storage mapping</span></div>
+      <div class="toolbar">
+        <button class="action" onclick="selectAllVms(true)" data-i18n="action.select_all">Select all</button>
+        <button class="action" onclick="selectAllVms(false)" data-i18n="action.clear">Clear</button>
+        <button class="action" onclick="useSelectedForConfig()" data-i18n="action.use_settings">Use in Settings</button>
+        <button class="action" onclick="dryRunSelected()" data-i18n="action.dry_run_selected">Dry-run selected</button>
+        <button class="action primary" onclick="backupSelected()" data-i18n="action.backup_selected">Backup selected</button>
+      </div>
+    </div>
+  </div>
+  <table>
+    <thead><tr><th scope="col" data-tip="tip.select" title="Select VMs for manual actions" aria-label="Select VMs for manual actions"></th><th scope="col" data-tip="tip.name" title="VM name and Engine ID">Name</th><th scope="col" data-tip="tip.status" title="Current VM power state in Engine">Status</th><th scope="col" data-tip="tip.vcpu" title="Number of virtual CPUs">vCPU</th><th scope="col" data-tip="tip.memory" title="Configured VM memory">Memory</th><th scope="col" data-tip="tip.disks" title="Attached disks and their oVirt storage domains">Disks / storage</th><th scope="col" class="vm-backup-flag" data-tip="tip.backup" title="Check mark means the VM is included in the saved backup settings">Backup</th><th scope="col" class="vm-actions" data-tip="tip.vm_action" title="Create a backup for this VM after selecting its row" aria-label="Create a backup for this VM after selecting its row"></th></tr></thead>
+    <tbody id="vmsBody"></tbody>
+  </table>
+</section>
+
+<section id="backups" class="page">
+  <div class="page-bar">
+    <div class="section-title"><h2 data-i18n="backups.title">Backup repository</h2></div>
+    <div id="backupNotice" aria-live="polite"></div>
+  </div>
+  <table class="backup-table">
+    <thead><tr><th scope="col" data-tip="tip.copy" title="Source VM, backup directory and checkpoint">Backup</th><th scope="col" data-tip="tip.copy_status" title="Status recorded in the backup manifest">Status</th><th scope="col" data-tip="tip.format" title="Backup type and disk image format">Type</th><th scope="col" data-tip="tip.count" title="Number of disks in the backup">Disks</th><th scope="col" data-tip="tip.size" title="Actual space occupied by the disk images">Size</th><th scope="col" data-tip="tip.copy_actions" title="Restore or delete this backup" aria-label="Restore or delete this backup"></th></tr></thead>
+    <tbody id="backupsBody"></tbody>
+  </table>
+</section>
+
+<section id="logs" class="page">
+  <div class="page-bar">
+    <div class="section-title">
+      <h2 data-i18n="log.title">Logs</h2>
+      <div class="toolbar">
+        <select id="logFilter" aria-label="Log filter" onchange="loadLogs(this.value)">
+          <option value="all" data-i18n="log.all">All events</option>
+          <option value="backup" data-i18n="log.backup_tab">Backup</option>
+          <option value="restore" data-i18n="action.restore">Restore</option>
+          <option value="config" data-i18n="log.config">Configuration</option>
+        </select>
+        <button class="action" onclick="loadLogs()" data-i18n="action.reload">Reload</button>
+      </div>
+    </div>
+  </div>
+  <pre id="logBox">Loading…</pre>
+</section>
+
+<section id="health" class="page">
+  <div class="page-bar">
+    <div class="section-title"><h2 data-i18n="health.title">Health</h2></div>
+  </div>
+  <div id="healthList"></div>
+</section>
+
+<section id="scheduler" class="page">
+  <div class="page-bar">
+    <div class="section-title">
+      <div>
+        <h2 style="margin:0" data-i18n="scheduler.title">Native scheduler</h2>
+      </div>
+      <div class="toolbar">
+        <button class="action" onclick="loadScheduler(true)" data-i18n="action.reload">Reload</button>
+        <button class="action" onclick="validateScheduler()" data-i18n="action.validate">Validate</button>
+        <button class="action primary" onclick="saveScheduler()" data-i18n="action.save">Save</button>
+      </div>
+    </div>
+
+    <div id="schedulerNotice"></div>
+    <div id="schedulerGuard" class="notice warn" hidden>
+      <strong data-i18n="scheduler.guard_details">Enablement blocked</strong>
+      <div id="schedulerGuardInfo"></div>
+      <pre id="schedulerGuardDetails" hidden></pre>
+    </div>
+  </div>
+
+  <div class="grid scheduler-grid">
+    <div class="card"><h3 data-i18n="scheduler.timer_state">Timer</h3><div id="schedulerTimerState" class="big">…</div><div id="schedulerTimerInfo" class="muted"></div></div>
+    <div class="card"><h3 data-i18n="scheduler.next_run">Next run</h3><div id="schedulerNextRun" class="big">…</div><div id="schedulerCalendar" class="muted"></div></div>
+    <div class="card"><h3 data-i18n="scheduler.last_run">Last trigger</h3><div id="schedulerLastRun" class="big">…</div><div id="schedulerServiceState" class="muted"></div></div>
+  </div>
+
+  <div class="section card">
+    <div class="settings-grid">
+      <div class="field">
+        <div class="field-label" data-i18n="scheduler.enabled">Enable native timer</div>
+        <div class="check-row">
+          <input id="schedulerEnabled" type="checkbox">
+          <label for="schedulerEnabled" data-i18n="scheduler.enabled_hint">Run backups on this schedule</label>
+        </div>
+      </div>
+      <div class="field">
+        <div class="field-label" data-i18n="scheduler.time">Start time</div>
+        <input id="schedulerTime" type="time" value="02:00">
+      </div>
+      <div class="field">
+        <div class="field-label" data-i18n="scheduler.timezone">Timezone</div>
+        <input id="schedulerTimezone" type="text" value="UTC">
+      </div>
+      <div class="field">
+        <div class="field-label" data-i18n="scheduler.random_delay">Random delay (seconds)</div>
+        <input id="schedulerRandomDelay" type="number" min="0" max="3600" step="1" value="0">
+      </div>
+    </div>
+
+    <div class="field" style="margin-top:12px">
+      <div class="field-label" data-i18n="scheduler.weekdays">Days of week</div>
+      <div class="weekday-grid">
+        <label><input type="checkbox" data-scheduler-day="mon" checked> <span data-i18n="day.mon">Mon</span></label>
+        <label><input type="checkbox" data-scheduler-day="tue" checked> <span data-i18n="day.tue">Tue</span></label>
+        <label><input type="checkbox" data-scheduler-day="wed" checked> <span data-i18n="day.wed">Wed</span></label>
+        <label><input type="checkbox" data-scheduler-day="thu" checked> <span data-i18n="day.thu">Thu</span></label>
+        <label><input type="checkbox" data-scheduler-day="fri" checked> <span data-i18n="day.fri">Fri</span></label>
+        <label><input type="checkbox" data-scheduler-day="sat" checked> <span data-i18n="day.sat">Sat</span></label>
+        <label><input type="checkbox" data-scheduler-day="sun" checked> <span data-i18n="day.sun">Sun</span></label>
+      </div>
+    </div>
+  </div>
+
+
+</section>
+
+<section id="settings" class="page">
+  <div class="page-bar">
+    <div class="section-title">
+      <div>
+        <h2 style="margin:0" data-i18n="settings.title">Native configuration</h2>
+        <div id="configPath" class="muted"></div>
+      </div>
+      <div class="toolbar">
+        <button class="action" onclick="loadSettings()" data-i18n="action.reload">Reload</button>
+        <button class="action" onclick="previewRetention()" data-i18n="action.retention_preview">Retention preview</button>
+        <button class="action" onclick="validateSettings()" data-i18n="action.validate">Validate</button>
+        <button class="action primary" onclick="saveSettings()" data-i18n="action.save">Save</button>
+      </div>
+    </div>
+    <div id="settingsNotice" aria-live="polite"></div>
+  </div>
+  <p id="settingsOptionsStatus" class="muted" hidden></p>
+  <div id="settingsForm"></div>
+  <div class="section">
+    <div class="section-title"><h2 data-i18n="settings.checks">Configuration checks</h2></div>
+    <div id="settingsChecks" class="muted" data-i18n="settings.checks_hint">Press Validate to test Engine, repository, network and restore defaults.</div>
+  </div>
+</section>
+</main>
+</div>
+
+<dialog id="restoreDialog">
+  <div class="section-title"><h2 style="margin:0" data-i18n="restore.title">Restore native backup</h2><button class="action" onclick="document.getElementById('restoreDialog').close()" data-i18n="action.close">Close</button></div>
+  <div id="restoreSource" class="notice muted"></div>
+  <div class="settings-grid">
+    <div class="field"><div class="field-label" data-i18n="restore.target_vm">Target VM name</div><input id="restoreTargetName" type="text"></div>
+    <div class="field"><div class="field-label" data-i18n="restore.cluster">Cluster</div><select id="restoreCluster"></select></div>
+    <div class="field"><div class="field-label" data-i18n="restore.storage">Storage domain</div><select id="restoreStorage"></select></div>
+    <div class="field"><div class="field-label" data-i18n="restore.network_mode">Network mode</div>
+      <select id="restoreNetworkMode">
+        <option value="none" data-i18n="restore.mode_none">none — no NICs</option>
+        <option value="isolated" selected data-i18n="restore.mode_isolated">isolated — new MAC, link down</option>
+        <option value="isolated-original-mac" data-i18n="restore.mode_isolated_original_mac">isolated — original MAC, link down</option>
+        <option value="original" data-i18n="restore.mode_original">original — saved MAC/profile (DR)</option>
+      </select>
+    </div>
+  </div>
+  <div class="notice warn" data-i18n="restore.warning">Restore always creates a new VM and never starts it automatically. The original network mode is refused by restore_native.py while the source VM still exists.</div>
+  <div class="toolbar" style="justify-content:flex-end;margin-top:14px">
+    <button class="action" onclick="restorePreflight()" data-i18n="action.preflight">Preflight</button>
+    <button class="action primary" onclick="startRestore()" data-i18n="action.execute_restore">Execute restore</button>
+  </div>
+</dialog>
+
+<dialog id="tokenDialog">
+  <form id="tokenForm" onsubmit="event.preventDefault(); saveToken()">
+    <h2 data-i18n="token.title">Sign in to the console</h2>
+    <label for="tokenInput" data-i18n="token.hint">Token from /etc/ovirt-backup/web.token</label>
+    <input id="tokenInput" type="password" autocomplete="off" required>
+    <div class="check-row"><input id="rememberLogin" type="checkbox" checked>
+      <label for="rememberLogin" data-i18n="token.remember">Remember me for 30 days</label>
+    </div>
+    <p id="tokenError" class="bad" role="alert" hidden></p>
+    <div class="row"><button id="tokenSubmit" class="action primary right" type="submit" data-i18n="action.connect">Connect</button></div>
+  </form>
+</dialog>
+
+<dialog id="outputDialog">
+  <div class="section-title"><h2 id="outputTitle" style="margin:0" data-i18n="output.title">Output</h2><button class="action" onclick="document.getElementById('outputDialog').close()" data-i18n="action.close">Close</button></div>
+  <pre id="outputBox"></pre>
+</dialog>
+
+<script>
+let signedIn=false;
+try{sessionStorage.removeItem("ovirtBackupToken")}catch(_e){}
+let settingsData=null;
+let settingsOptions=null;
+let settingsLoadId=0;
+let currentLogKind="all";
+let currentVms=[];
+let restoreBackupPath="";
+let restoreSourceVm="";
+let schedulerData=null;
+
+
+const browserLanguage=String(
+  (navigator.languages&&navigator.languages.length?navigator.languages[0]:navigator.language)||"en"
+).toLowerCase();
+const uiLang=(browserLanguage==="ru"||browserLanguage.startsWith("ru-"))?"ru":"en";
+document.documentElement.lang=uiLang;
+
+const I18N={
+  ru:{
+    "brand.console":"Консоль резервного копирования",
+    "action.refresh":"Обновить","nav.dashboard":"Обзор","nav.vms":"Виртуальные машины",
+    "nav.backups":"Резервные копии","nav.logs":"Журналы","nav.health":"Состояние","nav.scheduler":"Планировщик","nav.settings":"Настройки",
+    "dashboard.engine":"Engine","dashboard.repo_free":"Свободно в хранилище","dashboard.last_backup":"Последняя копия",
+    "dashboard.native_lock":"Блокировка native","dashboard.scheduler":"Планировщик",
+    "dashboard.manual_operation":"Ручная операция","dashboard.recent_backups":"Последние копии",
+    "dashboard.installed_stack":"Установленные компоненты",
+    "state.no_console_operation":"Нет операции консоли","state.idle":"Ожидание","state.no_operation_log":"Журнал операции отсутствует.",
+    "action.select_all":"Выбрать все","action.clear":"Очистить","action.use_settings":"Использовать в настройках",
+    "action.dry_run_selected":"Проверить выбранные","action.backup_selected":"Создать копию выбранных",
+    "vms.title":"Виртуальные машины","vms.subtitle":"Инвентаризация Engine с дисками и хранилищами",
+    "backups.title":"Хранилище резервных копий",
+    "action.backup":"Резервное копирование","action.restore":"Восстановление","action.reload":"Обновить",
+    "health.title":"Состояние",
+    "settings.title":"Конфигурация native",
+    "action.retention_preview":"Предпросмотр retention","action.validate":"Проверить","action.save":"Сохранить",
+    "settings.checks":"Проверка конфигурации","settings.checks_hint":"Нажмите «Проверить», чтобы проверить Engine, хранилище, сеть и параметры восстановления.",
+    "restore.title":"Восстановление native backup","restore.target_vm":"Имя целевой VM","restore.cluster":"Кластер",
+    "restore.storage":"Хранилище","restore.network_mode":"Режим сети",
+    "restore.mode_none":"none — без сетевых интерфейсов",
+    "restore.mode_isolated":"isolated — новый MAC, link отключён",
+    "restore.mode_isolated_original_mac":"isolated — исходный MAC, link отключён",
+    "restore.mode_original":"original — сохранённые MAC/профиль (DR)",
+    "restore.warning":"Восстановление всегда создаёт новую VM и никогда не запускает её автоматически. Режим isolated с исходным MAC сохраняет старый MAC, но принудительно оставляет link отключённым; при конфликте MAC нужен Allow Duplicates в MAC pool. Режим original будет отклонён restore_native.py, пока исходная VM существует.",
+    "action.preflight":"Предварительная проверка","action.execute_restore":"Выполнить восстановление",
+    "token.title":"Вход в консоль","token.hint":"Токен из /etc/ovirt-backup/web.token",
+    "action.connect":"Подключиться","action.close":"Закрыть","output.title":"Вывод",
+    "state.connected":"Подключено","state.error":"Ошибка","state.free":"Свободно","state.busy":"ЗАНЯТО",
+    "state.legacy":"LEGACY","state.inactive":"неактивен","state.running":"выполняется","state.complete":"завершено",
+    "state.failed":"ошибка","state.up":"включена","state.down":"выключена","state.locked":"заблокировано","state.active":"активно",
+    "state.no_native_operation":"Нет native-операции","state.no_manifests":"Нет manifest",
+    "state.no_backups":"Native-копий пока нет","state.no_vms":"VM не найдены","state.storage_unknown":"хранилище не определено",
+    "log.backup":"Журнал native backup","log.restore":"Журнал native restore",
+    "dry.title":"Проверка native","dry.running":"Проверка выбранных VM: {vms}\n",
+    "backup.confirm":"Запустить реальный native FULL backup для: {vms}?",
+    "backup.start_error":"Не удалось запустить backup: {error}",
+    "restore.source":"Backup: {path}","restore.options_error":"Не удалось загрузить параметры восстановления: {error}",
+    "restore.preflight_title":"Предварительная проверка восстановления","restore.preflight_running":"Выполняется предварительная проверка восстановления…",
+    "restore.target_required":"Нужно указать имя целевой VM.",
+    "restore.confirm":"Выполнить восстановление в НОВУЮ VM «{name}» на {storage}? VM останется выключенной.",
+    "restore.start_error":"Не удалось запустить восстановление: {error}",
+    "settings.selected_copied":"Список выбранных VM перенесён в настройки. Нажмите «Проверить», затем «Сохранить».",
+    "settings.open_first":"Сначала откройте «Настройки», чтобы загрузить форму.",
+    "common.select_vm":"Выберите хотя бы одну VM.",
+    "common.error":"ОШИБКА: {error}\n{detail}",
+    "settings.load_error":"Не удалось загрузить настройки: {error}",
+    "settings.validating":"Проверка конфигурации…","settings.valid":"Конфигурация прошла проверку.",
+    "settings.invalid_runtime":"Проверка завершена с ошибками.",
+    "retention.title":"Предпросмотр retention","retention.repo":"Хранилище: {root}","retention.delete":"Будет удалено: {count}",
+    "retention.keep":"Будет сохранено: {count}","retention.none":"Завершённые native backup-каталоги удаляться не будут.",
+    "retention.dialog":"Предпросмотр retention — файлы не изменяются",
+    "settings.save_anyway":"Некоторые runtime-проверки не прошли. Всё равно сохранить структурно корректную конфигурацию?",
+    "settings.save_confirm":"Сохранить конфигурацию native backup? Предыдущий файл будет сначала сохранён в истории.",
+    "settings.saving":"Сохранение конфигурации…","settings.saved":"Конфигурация сохранена атомарно.",
+    "settings.previous":" Предыдущая версия: {path}",
+    "table.created":"Создано","table.status":"Статус","table.disks":"Диски","table.actual":"Фактически",
+    "table.name":"Имя","table.memory":"Память","table.disk_storage":"Диски / хранилище","table.directory":"Каталог",
+    "table.type":"Тип","table.checkpoint":"Checkpoint",
+    "action.restore_more":"Восстановить","field.enabled":"Включено","field.disabled":"Выключено",
+    "field.one_per_line":"По одному значению в строке","field.secret_stored":"Сохранён; оставьте пустым, чтобы не менять",
+    "field.secret_enter":"Введите пароль","field.advanced":"дополнительно",
+    "dashboard.operation_log":"Журнал операции",
+    "action.backup_vm":"Создать копию",
+    "vms.in_config":"Включена",
+    "vms.not_in_config":"Не включена",
+    "tip.select":"Выбрать ВМ для ручных действий",
+    "tip.name":"Имя ВМ и её идентификатор в Engine",
+    "tip.status":"Текущее состояние ВМ в Engine",
+    "tip.vcpu":"Количество виртуальных процессоров",
+    "tip.memory":"Объём памяти, заданный для ВМ",
+    "tip.disks":"Подключённые диски и их домены хранения oVirt",
+    "tip.backup":"Галочка означает, что ВМ входит в сохранённые настройки бэкапа",
+    "tip.vm_action":"Создать копию этой ВМ после выбора строки",
+    "tip.copy":"Исходная ВМ, каталог копии и Checkpoint",
+    "tip.copy_status":"Состояние копии по её манифесту",
+    "tip.format":"Тип копии и формат образов дисков",
+    "tip.count":"Количество дисков в копии",
+    "tip.size":"Фактическое место, занятое образами дисков",
+    "tip.copy_actions":"Восстановить или удалить эту копию",
+    "token.remember":"Запомнить вход на 30 дней",
+    "token.logout":"Выйти",
+    "token.invalid":"Неверный токен консоли.",
+    "token.cookie_failed":"Браузер не принял сессию. Откройте консоль по HTTPS и проверьте настройки cookie.",
+    "log.title":"Журнал",
+    "log.all":"Все события",
+    "log.backup_tab":"Бэкап",
+    "log.config":"Конфигурация",
+    "log.audit_error":"Настройки сохранены, но записать изменения в журнал не удалось.",
+    "log.no_entries":"Нет записей в журнале",
+    "backup.delete_audit_error":"Копия удалена, но запись в историю удаления сохранить не удалось.",
+    "action.delete_backup":"Удалить",
+    "backup.delete_confirm":"Удалить копию {vm} / {directory} без возможности восстановления?",
+    "backup.delete_done":"Копия удалена.",
+    "backup.delete_error":"Ошибка удаления: {error}",
+    "backup.delete_pending":"Удаление не завершено",
+    "restore.storage_required":"Выберите целевое хранилище.",
+    "settings.options_error":"Списки Engine недоступны. Сохранённые значения показаны в форме. Нажмите «Перезагрузить», чтобы повторить.",
+    "field.saved_value":"сохранённое значение",
+    "field.multi_select":"Для выбора нескольких значений удерживайте Ctrl или ⌘.",
+    "field.engine_route":"Маршрут Engine по умолчанию",
+    "field.restore_prompt":"Выбрать при восстановлении",
+    "field.no_tag":"Без тега",
+    "field.no_options":"Нет доступных вариантов",
+    "field.no_selection":"Не выбрано",
+    "scheduler.title":"Планировщик native backup",
+    "scheduler.timer_state":"Timer","scheduler.next_run":"Следующий запуск","scheduler.last_run":"Последний запуск",
+    "scheduler.enabled":"Включить native timer",
+    "scheduler.enabled_hint":"Запускать резервное копирование по расписанию","scheduler.time":"Время запуска",
+    "scheduler.timezone":"Часовой пояс","scheduler.random_delay":"Случайная задержка (секунд)",
+    "scheduler.weekdays":"Дни недели","scheduler.guard_details":"Включение заблокировано",
+    "scheduler.disabled":"выключен","scheduler.enabled_state":"включён",
+    "scheduler.validation_ok":"Расписание корректно: {calendar}",
+    "scheduler.saved":"Настройки планировщика сохранены.",
+    "scheduler.drift":"Сохранённое расписание не совпадает с состоянием native systemd timer. Native timer остаётся выключенным, пока вы явно не перенесёте расписание на него.",
+    "scheduler.legacy_detected":"Обнаружено старое задание cron или запущен legacy-бэкап.",
+    "scheduler.enable_confirm":"Включить запуск резервного копирования по расписанию?",
+    "scheduler.load_error":"Не удалось загрузить планировщик: {error}",
+    "scheduler.save_error":"Не удалось сохранить планировщик: {error}",
+    "scheduler.validate_error":"Ошибка проверки планировщика: {error}",
+    "day.mon":"Пн","day.tue":"Вт","day.wed":"Ср","day.thu":"Чт","day.fri":"Пт","day.sat":"Сб","day.sun":"Вс",
+    "check.ok":"✓ OK","check.fail":"✕ ОШИБКА"
+  },
+  en:{}
+};
+function t(key,vars={}){
+  let text=(I18N[uiLang]&&I18N[uiLang][key])||key;
+  for(const [name,value] of Object.entries(vars)){
+    text=text.replaceAll("{"+name+"}",String(value??""));
+  }
+  return text;
+}
+function staticText(key,fallback){
+  return uiLang==="en"?fallback:t(key);
+}
+function applyI18n(){
+  document.querySelectorAll("[data-i18n]").forEach(el=>{
+    const key=el.dataset.i18n;
+    if(uiLang!=="en"&&I18N[uiLang]?.[key])el.textContent=I18N[uiLang][key];
+  });
+}
+const STATUS_KEYS={
+  connected:"state.connected",error:"state.error",free:"state.free",busy:"state.busy",
+  legacy:"state.legacy",inactive:"state.inactive",running:"state.running",complete:"state.complete",
+  failed:"state.failed",idle:"state.idle",up:"state.up",down:"state.down",locked:"state.locked",
+  image_locked:"state.locked",active:"state.active"
+};
+function localizedStatus(value){
+  const raw=String(value??"");
+  const key=STATUS_KEYS[raw.toLowerCase()];
+  return key?staticText(key,raw):raw;
+}
+const CHECK_NAMES_RU={
+  "TLS CA":"TLS CA","Backup repository":"Хранилище backup","Repository mount":"Монтирование хранилища",
+  "Repository writable":"Запись в хранилище","Repository free space":"Свободное место",
+  "Engine API":"Engine API","VM selection":"Выбор VM","ImageIO network":"Сеть ImageIO",
+  "Restore storage domain":"Хранилище восстановления","Restore cluster":"Кластер восстановления",
+  "Config directory":"Каталог конфигурации","Config history directory":"История конфигурации",
+  "Backup log":"Журнал backup","Restore log":"Журнал restore","Native operation lock":"Блокировка native"
+};
+function checkName(name){return uiLang==="ru"?(CHECK_NAMES_RU[name]||name):name}
+const SETTING_GROUP_RU={
+  "Virtual machines":"Виртуальные машины","Engine":"Engine","Repository":"Хранилище","TLS":"TLS",
+  "Backup":"Резервное копирование","Image transfer":"Передача образов","Retention":"Хранение","Disks":"Диски",
+  "Restore defaults":"Параметры восстановления","Logging":"Журналы","Safety":"Безопасность"
+};
+const SETTING_LABEL_RU={
+  vm_names:"Выбранные VM",vm_names_skip:"Исключить VM",vm_tag:"Тег VM",all_vms:"Все VM",
+  server:"URL Engine API",username:"Пользователь",password:"Пароль",backup_path:"Путь backup",
+  backup_path_must_be_mount:"Требовать mount point",storage_space_threshold:"Запас свободного места",
+  ca_file:"Файл CA",verify_tls:"Проверять TLS",require_consistency:"Требовать guest consistency",
+  imageio_network:"Логическая сеть ImageIO",imageio_max_workers:"Потоки загрузки",
+  imageio_timeout:"Таймаут ImageTransfer",imageio_http_read_timeout:"Таймаут чтения ImageIO HTTP",imageio_timeout_policy:"Политика таймаута",
+  imageio_progress_interval:"Интервал записи прогресса",imageio_progress_percent:"Шаг прогресса в процентах",
+  backup_operation_timeout:"Таймаут операции backup",backup_keep_count:"Хранить по возрасту",
+  backup_keep_count_by_number:"Хранить по количеству",bootable_only:"Только загрузочный диск",
+  with_disks_deactivated:"Включать деактивированные диски",disks_id_exclude:"Исключённые ID дисков",
+  cluster_name:"Целевой кластер",storage_domain:"Целевое хранилище",logger_fmt:"Формат журнала",
+  native_logger_file_path:"Журнал backup",native_restore_logger_file_path:"Журнал restore",
+  dry_run:"Принудительный dry-run"
+};
+const SETTING_DESC_RU={
+  vm_names:"Явный список VM. Используйте только один режим выбора.",
+  password:"Оставьте пустым, чтобы сохранить текущий пароль.",
+  vm_names_skip:"Backup всех VM, кроме перечисленных.",
+  vm_tag:"Backup VM с указанным тегом oVirt.",
+  all_vms:"Backup всех VM, возвращаемых Engine.",
+  backup_path:"Обычная смонтированная файловая система/NFS, не oVirt Export Domain.",
+  storage_space_threshold:"0.10 означает размер provisioned + 10% запаса.",
+  require_consistency:"Ошибка, если guest freeze/consistency получить не удалось.",
+  imageio_network:"Логическая сеть для прямого host ImageTransfer.",
+  imageio_http_read_timeout:"Таймаут чтения HTTP backend ImageIO. На больших дисках получение EXTENTS может занимать больше стандартных 60 секунд.",
+  backup_keep_count:"Пусто отключает удаление по возрасту.",
+  backup_keep_count_by_number:"Пусто отключает ограничение по количеству.",
+  storage_domain:"Хранилище по умолчанию для дисков восстановленной ВМ. Его можно изменить в диалоге восстановления.",
+  dry_run:"Если включено, service/manual backup не создают реальные backup."
+};
+function settingGroup(group){return uiLang==="ru"?(SETTING_GROUP_RU[group]||group):group}
+function settingLabel(spec){return uiLang==="ru"?(SETTING_LABEL_RU[spec.key]||spec.label||spec.key):(spec.label||spec.key)}
+function settingDescription(spec){return uiLang==="ru"?(SETTING_DESC_RU[spec.key]||spec.description||""):(spec.description||"")}
+function settingUnit(unit){
+  if(uiLang!=="ru")return unit;
+  return ({seconds:"секунд",days:"дней"}[unit]||unit);
+}
+applyI18n();
+for(const cell of document.querySelectorAll("[data-tip]")){
+  cell.title=staticText(cell.dataset.tip,cell.title);
+  if(cell.hasAttribute("aria-label"))cell.setAttribute("aria-label",cell.title);
+}
+if(uiLang==="ru"){
+  const tableMaps=[
+    ["#recentBody","thead th",["VM","Создано","Статус","Диски","Фактически","Backup ID"]],
+    ["#vmsBody","thead th",["","Имя","Статус","vCPU","Память","Диски / хранилище","Бэкап"]],
+    ["#backupsBody","thead th",["Копия","Статус","Тип","Диски","Размер",""]]
+  ];
+  for(const [bodySelector,headerSelector,labels] of tableMaps){
+    const body=document.querySelector(bodySelector);
+    const table=body?.closest("table");
+    if(!table)continue;
+    [...table.querySelectorAll(headerSelector)].forEach((th,i)=>{if(labels[i]!==undefined)th.textContent=labels[i]});
+  }
+}
+
+const fmtBytes=n=>{
+  if(n===null||n===undefined)return "—";
+  const u=["B","KiB","MiB","GiB","TiB"];let i=0,v=Number(n);
+  while(v>=1024&&i<u.length-1){v/=1024;i++}
+  return v.toFixed(i<2?0:2)+" "+u[i]
+};
+const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+function statusClass(s){
+  s=String(s||"").toLowerCase();
+  if(s==="complete"||s==="up"||s==="active")return "good";
+  if(s.includes("fail")||s.includes("error"))return "bad";
+  if(s.includes("locked")||s.includes("wait"))return "warn";
+  return "muted";
+}
+async function api(path,options={}){
+  const h=Object.assign({},options.headers||{});
+  h["X-oVirt-Console"]="1";
+  const r=await fetch(path,Object.assign({},options,{headers:h}));
+  if(r.status===401){
+    signedIn=false;
+    document.getElementById("logoutButton").hidden=true;
+    const dlg=document.getElementById("tokenDialog");
+    if(!dlg.open)dlg.showModal();
+    const error=new Error("Unauthorized");
+    error.status=401;
+    throw error;
+  }
+  let j={};
+  try{j=await r.json()}catch(_e){}
+  if(!r.ok){
+    const e=new Error(j.error||r.statusText);
+    e.data=j;
+    throw e;
+  }
+  return j;
+}
+async function post(path,data){
+  return api(path,{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify(data)
+  });
+}
+async function saveToken(){
+  const input=document.getElementById("tokenInput");
+  const button=document.getElementById("tokenSubmit");
+  const message=document.getElementById("tokenError");
+  button.disabled=true;
+  message.hidden=true;
+  let accepted=false;
+  try{
+    await post("api/session",{
+      token:input.value.trim(),
+      remember:document.getElementById("rememberLogin").checked
+    });
+    accepted=true;
+    await api("api/session");
+    input.value="";
+    document.getElementById("tokenDialog").close();
+    signedIn=true;
+    document.getElementById("logoutButton").hidden=false;
+    refreshAll();
+  }catch(error){
+    message.textContent=error.status===401?
+      (accepted?staticText("token.cookie_failed","Browser rejected the session. Use HTTPS and check cookie settings."):
+        staticText("token.invalid","Invalid console token.")):error.message;
+    message.hidden=false;
+  }finally{
+    button.disabled=false;
+  }
+}
+async function logout(){
+  try{
+    await post("api/session",{action:"logout"});
+    location.reload();
+  }catch(error){alert(error.message)}
+}
+async function startConsole(){
+  try{
+    await api("api/session");
+    signedIn=true;
+    document.getElementById("logoutButton").hidden=false;
+    await refreshAll();
+  }catch(error){
+    if(error.status!==401)console.warn(error);
+  }
+}
+function kv(k,v){return '<div class="kv"><div class="muted">'+esc(k)+'</div><div>'+esc(v)+'</div></div>'}
+function showPage(id){
+  document.querySelectorAll("nav button").forEach(x=>x.classList.toggle("active",x.dataset.page===id));
+  document.querySelectorAll(".page").forEach(x=>x.classList.toggle("active",x.id===id));
+}
+function setNotice(text,kind="muted"){
+  const box=document.getElementById("settingsNotice");
+  box.innerHTML=text?'<div class="notice '+kind+'">'+esc(text)+'</div>':"";
+}
+function renderChecks(result,target="settingsChecks"){
+  const el=document.getElementById(target);
+  const checks=result?.checks||[];
+  el.innerHTML=checks.map(c=>
+    '<div class="check-card"><div class="row"><strong>'+esc(checkName(c.name))+'</strong>'+
+    '<span class="right '+(c.ok?"good":"bad")+'">'+(c.ok?staticText("check.ok","✓ OK"):staticText("check.fail","✕ FAIL"))+'</span></div>'+
+    '<div class="muted">'+esc(c.detail||"")+'</div></div>'
+  ).join("")||'<div class="muted">No checks returned</div>';
+}
+
+function renderLockState(lock={},legacy=[]){
+  document.getElementById("lockState").textContent=legacy.length?
+    staticText("state.legacy","LEGACY"):
+    (lock.busy?staticText("state.busy","BUSY"):staticText("state.free","Free"));
+  document.getElementById("lockState").className="big "+((legacy.length||lock.busy)?"warn":"good");
+  document.getElementById("lockInfo").textContent=legacy.length?
+    ((uiLang==="ru"?"Активен legacy backup.py: ":"Legacy backup.py active: ")+legacy.map(x=>"pid="+x.pid).join(", ")) :
+    (lock.busy?(lock.holder||staticText("state.no_native_operation","Native operation")):
+      staticText("state.no_native_operation","No native operation"));
+}
+
+async function loadOverview(){
+  const d=await api("api/overview");
+  const consoleInfo=d.console||{};
+  const versionParts=[];
+  if(consoleInfo.version)versionParts.push("v"+consoleInfo.version);
+  if(consoleInfo.commit)versionParts.push(consoleInfo.commit);
+  document.getElementById("consoleVersion").textContent=versionParts.join(" · ")||"v?";
+  document.getElementById("consoleVersion").title=consoleInfo.branch||"";
+
+  document.getElementById("engineState").textContent=d.engine.ok?staticText("state.connected","Connected"):staticText("state.error","Error");
+  document.getElementById("engineState").className="big "+(d.engine.ok?"good":"bad");
+  document.getElementById("engineBadge").textContent=d.engine.ok?(uiLang==="ru"?"Engine подключён":"Engine connected"):(uiLang==="ru"?"Ошибка Engine":"Engine error");
+  document.getElementById("engineBadge").className="pill "+(d.engine.ok?"good":"bad");
+  document.getElementById("engineInfo").textContent=(d.engine.api_version||"API version unknown")+" · "+(d.engine.latency_ms||0)+" ms";
+  document.getElementById("repoFree").textContent=fmtBytes(d.repository.free_bytes);
+  document.getElementById("repoPath").textContent=d.repository.path||"Not configured";
+  const b=d.last_backup;
+  document.getElementById("lastBackup").textContent=b?(b.vm_name||"—"):(uiLang==="ru"?"Нет":"None");
+  document.getElementById("lastBackupInfo").textContent=b?((b.directory||"")+" · "+localizedStatus(b.status||"")):staticText("state.no_manifests","No manifests");
+  renderLockState(d.lock||{},d.legacy_backup_processes||[]);
+  document.getElementById("timerState").textContent=localizedStatus(d.timer.ActiveState|| (uiLang==="ru"?"Недоступен":"Unavailable"));
+  document.getElementById("timerInfo").textContent=d.timer.NextElapseUSecRealtime||(uiLang==="ru"?"timer не установлен/не включён":"timer not installed/enabled");
+  document.getElementById("packages").innerHTML=Object.entries(d.packages).map(([k,v])=>kv(k,v||"not installed")).join("");
+}
+async function loadBackups(){
+  const d=await api("api/backups?limit=250");
+  const body=document.getElementById("backupsBody");
+  const expanded=new Set([...body.querySelectorAll(".backup-checkpoint[open]")].map(el=>el.dataset.path));
+  const metric=(label,value)=>'<td class="backup-metric"><span class="backup-mobile-label" aria-hidden="true">'+label+'</span>'+value+'</td>';
+  body.innerHTML=d.backups.map(b=>{
+    const canRestore=String(b.status||"").toLowerCase()==="complete";
+    const pending=b.status==="delete_pending";
+    const action=canRestore?'<button class="action restore-btn" data-path="'+esc(encodeURIComponent(b.path||""))+'" data-vm="'+esc(encodeURIComponent(b.vm_name||""))+'">'+esc(staticText("action.restore_more","Restore"))+'</button>':"";
+    const deleteAction=b.can_delete?'<button class="action danger delete-backup-btn" data-path="'+esc(encodeURIComponent(b.path))+'" data-vm="'+esc(b.vm_name)+'" data-directory="'+esc(b.directory)+'">'+esc(staticText("action.delete_backup","Delete"))+'</button>':"";
+    const path=encodeURIComponent(b.path||"");
+    const checkpoint=b.checkpoint_id?'<details class="backup-checkpoint" data-path="'+esc(path)+'"'+
+      (expanded.has(path)?" open":"")+'><summary>Checkpoint</summary><code>'+esc(b.checkpoint_id)+'</code></details>':"";
+    return '<tr><td class="backup-copy"><strong>'+esc(b.vm_name)+'</strong><span class="code-id muted">'+esc(b.directory)+'</span>'+checkpoint+'</td>'+
+      '<td class="backup-state '+statusClass(b.status)+'">'+esc(pending?staticText("backup.delete_pending","Deletion incomplete"):localizedStatus(b.status))+'</td>'+
+      metric(uiLang==="ru"?"Тип":"Type",esc(b.type)+(b.formats?.length?' · '+esc(b.formats.join(", ")):""))+
+      metric(uiLang==="ru"?"Диски":"Disks",esc(b.disk_count))+
+      metric(uiLang==="ru"?"Размер":"Size",fmtBytes(b.actual_size))+
+      '<td class="backup-actions"><div class="backup-action-buttons">'+action+deleteAction+'</div></td></tr>';
+  }).join("")||'<tr><td colspan="6" class="backup-empty muted">'+(uiLang==="ru"?"Резервных копий пока нет":"No native backups yet")+'</td></tr>';
+  document.querySelectorAll(".restore-btn").forEach(btn=>btn.onclick=()=>openRestoreDialog(
+    decodeURIComponent(btn.dataset.path||""),
+    decodeURIComponent(btn.dataset.vm||"")
+  ));
+  document.getElementById("recentBody").innerHTML=d.backups.filter(b=>b.status!=="delete_pending").slice(0,10).map(b=>
+    '<tr><td>'+esc(b.vm_name)+'</td><td>'+esc(b.directory)+'</td>'+
+    '<td class="'+statusClass(b.status)+'">'+esc(localizedStatus(b.status))+'</td><td>'+esc(b.disk_count)+'</td>'+
+    '<td>'+fmtBytes(b.actual_size)+'</td><td>'+esc(b.backup_id||"—")+'</td></tr>'
+  ).join("")||'<tr><td colspan="6" class="muted">No native backups yet</td></tr>';
+}
+function backupNotice(text,kind){
+  const node=document.createElement("div");
+  node.className="notice "+kind;
+  node.textContent=text;
+  document.getElementById("backupNotice").replaceChildren(node);
+}
+
+async function deleteBackup(button){
+  const {path,vm,directory}=button.dataset;
+  if(!confirm(uiLang==="ru"?t("backup.delete_confirm",{vm,directory}):
+    "Permanently delete backup "+vm+" / "+directory+"?"))return;
+  button.disabled=true;
+  try{
+    const result=await post("api/backups/delete",{backup_dir:decodeURIComponent(path)});
+    if(result.audit_written===false){
+      backupNotice(staticText("backup.delete_audit_error","Backup deleted, but the audit entry could not be saved."),"warn");
+    }else backupNotice(staticText("backup.delete_done","Backup deleted."),"good");
+  }catch(e){
+    backupNotice(uiLang==="ru"?t("backup.delete_error",{error:e.message}):"Backup deletion failed: "+e.message,"bad");
+  }finally{
+    button.disabled=false;
+    await loadBackups().catch(console.warn);
+    loadOverview().catch(console.warn);
+  }
+}
+
+async function loadVms(){
+  const selected=new Set(selectedVmNames());
+  const body=document.getElementById("vmsBody");
+  body.innerHTML='<tr><td colspan="8"><span class="spinner"></span> '+esc(uiLang==="ru"?"Загрузка инвентаризации Engine…":"Loading Engine disk inventory…")+'</td></tr>';
+  const d=await api("api/vms?details=1");
+  currentVms=d.vms||[];
+  body.innerHTML=currentVms.map(v=>{
+    const disks=(v.disks||[]).map(d=>{
+      const stores=(d.storage_domains||[]).map(s=>esc(s.name||s.id)+(s.address?' · '+esc(s.address):'')).join("<br>")||staticText("state.storage_unknown","storage unknown");
+      return '<div class="disk"><strong>'+esc(d.alias||d.id)+'</strong> · '+fmtBytes(d.provisioned_size)+
+        (d.bootable?' · bootable':'')+'<div class="storage">'+stores+'</div></div>';
+    }).join("")||(v.disk_error?'<span class="bad">'+esc(v.disk_error)+'</span>':'—');
+    return '<tr><td><input class="vm-select" type="checkbox" value="'+esc(v.name)+'"'+(selected.has(v.name)?' checked':'')+'></td>'+
+      '<td><strong>'+esc(v.name)+'</strong><div class="code-id">'+esc(v.id)+'</div></td>'+
+      '<td class="'+statusClass(v.status)+'">'+esc(localizedStatus(v.status))+'</td><td>'+esc(v.cpu_cores||"—")+'</td>'+
+      '<td>'+fmtBytes(v.memory)+'</td><td>'+disks+'</td>'+
+      '<td class="vm-backup-flag" title="'+esc(v.configured_for_backup?
+        staticText("vms.in_config","Included in backup settings"):
+        staticText("vms.not_in_config","Excluded from backup settings"))+'">'+
+        (v.configured_for_backup?'<span class="good" aria-hidden="true">✓</span>':'')+'</td>'+
+      '<td class="vm-actions"><button class="action vm-backup-btn">'+esc(staticText("action.backup_vm","Create backup"))+'</button></td></tr>';
+  }).join("")||'<tr><td colspan="8" class="muted">'+esc(staticText("state.no_vms","No VMs"))+'</td></tr>';
+}
+function selectedVmNames(){
+  return [...document.querySelectorAll(".vm-select:checked")].map(x=>x.value);
+}
+function selectAllVms(value){
+  document.querySelectorAll(".vm-select").forEach(x=>x.checked=value);
+}
+async function dryRunSelected(){
+  const names=selectedVmNames();
+  if(!names.length){alert(staticText("common.select_vm","Select at least one VM."));return}
+  const dlg=document.getElementById("outputDialog");
+  document.getElementById("outputTitle").textContent=staticText("dry.title","Native dry-run");
+  document.getElementById("outputBox").textContent=uiLang==="ru"?t("dry.running",{vms:names.join(", ")}):("Running dry-run for: "+names.join(", ")+"\n");
+  dlg.showModal();
+  try{
+    const d=await post("api/actions/dry-run",{vm_names:names});
+    document.getElementById("outputBox").textContent=d.output||"(no output)";
+  }catch(e){
+    document.getElementById("outputBox").textContent=uiLang==="ru"?t("common.error",{error:e.message,detail:JSON.stringify(e.data||{},null,2)}):("ERROR: "+e.message+"\n"+JSON.stringify(e.data||{},null,2));
+  }
+}
+async function backupSelected(names=selectedVmNames()){
+  if(!names.length){alert(staticText("common.select_vm","Select at least one VM."));return}
+  if(!confirm(uiLang==="ru"?t("backup.confirm",{vms:names.join(", ")}):("Start a real native FULL backup for: "+names.join(", ")+"?")))return;
+  try{
+    const d=await post("api/actions/backup",{vm_names:names});
+    showPage("dashboard");
+    await loadOperation();
+    // One confirmation is enough: operation state is shown on Dashboard.
+  }catch(e){
+    alert(uiLang==="ru"?t("backup.start_error",{error:e.message}):("Cannot start backup: "+e.message));
+  }
+}
+
+async function useSelectedForConfig(){
+  const names=selectedVmNames();
+  if(!names.length){alert(staticText("common.select_vm","Select at least one VM."));return}
+  if(!settingsData){alert(staticText("settings.open_first","Open Settings once so the form is loaded."));return}
+  showPage("settings");
+  if(!settingsOptions)await loadSettings();
+  const list=document.querySelector('[data-setting="vm_names"]');
+  const skip=document.querySelector('[data-setting="vm_names_skip"]');
+  const tag=document.querySelector('[data-setting="vm_tag"]');
+  const all=document.querySelector('[data-setting="all_vms"]');
+  if(list){
+    if(list.multiple){
+      for(const name of names){
+        if(![...list.options].some(option=>option.value===name)){
+          list.add(new Option(name,name));
+        }
+      }
+      for(const option of list.options)option.selected=names.includes(option.value);
+    }else list.value=names.join("\n");
+  }
+  if(skip){
+    if(skip.multiple)skip.selectedIndex=-1;
+    else skip.value="";
+  }
+  if(tag)tag.value="";
+  if(all)all.checked=false;
+  resetSettingsChecks();
+  setNotice(staticText("settings.selected_copied","Selected VM list copied into the form. Press Validate, then Save."),"warn");
+}
+
+function selectionTouches(element){
+  const selection=window.getSelection?.();
+  if(!selection||selection.isCollapsed||selection.rangeCount===0)return false;
+  const range=selection.getRangeAt(0);
+  return element.contains(range.commonAncestorContainer);
+}
+
+function updateLivePre(element,text,{follow=true}={}){
+  // Reassigning textContent destroys text selection even if the text is unchanged.
+  if(element.textContent===text)return false;
+
+  // Do not disturb a selection while the user is copying the log.
+  // The next periodic refresh catches up after selection is released.
+  if(selectionTouches(element))return false;
+
+  const nearBottom=(element.scrollHeight-element.scrollTop-element.clientHeight)<32;
+  element.textContent=text;
+  if(follow&&nearBottom)element.scrollTop=element.scrollHeight;
+  return true;
+}
+
+async function loadLogs(kind=currentLogKind){
+  currentLogKind=kind;
+  const box=document.getElementById("logBox");
+  try{
+    const d=await api("api/logs?kind="+encodeURIComponent(kind)+"&lines=600");
+    if(kind!==currentLogKind)return;
+    updateLivePre(box,d.lines.join("\n")||staticText("log.no_entries","No log entries"));
+  }catch(e){
+    if(kind===currentLogKind)updateLivePre(box,e.message,{follow:false});
+  }
+}
+async function loadHealth(){
+  const d=await api("api/health");
+  renderChecks(d,"healthList");
+}
+
+function engineSelect(spec,value){
+  const multiple=spec.type==="list";
+  const values=multiple?(Array.isArray(value)?value:[value].filter(Boolean)):[value??""];
+  const selected=new Set(values.map(String));
+  const choices=new Map();
+  const blankLabels={
+    imageio_network:staticText("field.engine_route","Engine default route"),
+    storage_domain:staticText("field.restore_prompt","Choose during restore"),
+    vm_tag:staticText("field.no_tag","No tag")
+  };
+  if(blankLabels[spec.key])choices.set("",blankLabels[spec.key]);
+  else if(!multiple&&selected.has(""))choices.set("",staticText("field.no_selection","No selection"));
+  for(const item of settingsOptions?.[spec.options_source]||[]){
+    const id=spec.options_source==="disks"?item.id:item.name;
+    if(!id||choices.has(id))continue;
+    const detail=spec.options_source==="disks"?(item.name?id:""):item.address;
+    choices.set(id,(item.name||id)+(detail?" · "+detail:""));
+  }
+  for(const saved of selected){
+    if(saved&&!choices.has(saved)){
+      choices.set(saved,saved+" · "+staticText("field.saved_value","saved value"));
+    }
+  }
+  if(!choices.size){
+    choices.set("",staticText("field.no_options","No options available"));
+  }
+  return '<select id="setting-'+esc(spec.key)+'" data-setting="'+esc(spec.key)+'" data-type="'+esc(spec.type)+'"'+
+    (multiple?' multiple size="6"':'')+'>'+
+    [...choices].map(([id,label])=>'<option value="'+esc(id)+'"'+
+      (selected.has(id)?" selected":"")+(multiple&&!id?" disabled":"")+'>'+esc(label)+'</option>').join("")+
+    '</select>'+(multiple?'<small>'+esc(staticText("field.multi_select","Hold Ctrl or ⌘ to select multiple values."))+'</small>':'');
+}
+
+function inputForSetting(spec,value,secretSet){
+  const key=spec.key;
+  const id="setting-"+key;
+  if(spec.options_source)return engineSelect(spec,value);
+  if(spec.type==="bool"){
+    return '<div class="check-row"><input id="'+id+'" data-setting="'+esc(key)+'" data-type="bool" type="checkbox" '+(value?"checked":"")+'>'+
+      '<label for="'+id+'">'+esc(value?staticText("field.enabled","Enabled"):staticText("field.disabled","Disabled"))+'</label></div>';
+  }
+  if(spec.type==="list"){
+    return '<textarea id="'+id+'" data-setting="'+esc(key)+'" data-type="list" placeholder="'+esc(staticText("field.one_per_line","One item per line"))+'">'+esc((value||[]).join("\n"))+'</textarea>';
+  }
+  if(spec.type==="choice"){
+    return '<select id="'+id+'" data-setting="'+esc(key)+'" data-type="choice">'+
+      (spec.choices||[]).map(x=>'<option value="'+esc(x)+'" '+(String(value)===String(x)?"selected":"")+'>'+esc(x)+'</option>').join("")+
+      '</select>';
+  }
+  const type=spec.type==="secret"?"password":((spec.type==="int"||spec.type==="optional_int"||spec.type==="float")?"number":"text");
+  const attrs=[];
+  if(spec.min!==undefined)attrs.push('min="'+esc(spec.min)+'"');
+  if(spec.max!==undefined)attrs.push('max="'+esc(spec.max)+'"');
+  if(spec.step!==undefined)attrs.push('step="'+esc(spec.step)+'"');
+  else if(spec.type==="float")attrs.push('step="any"');
+  const placeholder=spec.type==="secret"?(secretSet?staticText("field.secret_stored","Stored; leave blank to keep"):staticText("field.secret_enter","Enter password")):"";
+  const shown=spec.type==="secret"?"":(value??"");
+  return '<input id="'+id+'" data-setting="'+esc(key)+'" data-type="'+esc(spec.type)+'" type="'+type+'" value="'+esc(shown)+'" placeholder="'+esc(placeholder)+'" '+attrs.join(" ")+'>';
+}
+function renderSettings(data){
+  settingsData=data;
+  document.getElementById("configPath").textContent=data.config_path||"";
+  const groups={};
+  (data.schema||[]).forEach(spec=>{
+    (groups[spec.group]??=[]).push(spec);
+  });
+  document.getElementById("settingsForm").innerHTML=Object.entries(groups).map(([group,specs])=>
+    '<div class="settings-group"><h2>'+esc(settingGroup(group))+'</h2><div class="settings-grid">'+
+    specs.map(spec=>{
+      const value=data.values?.[spec.key];
+      const unit=spec.unit?' <span class="unit">('+esc(settingUnit(spec.unit))+')</span>':'';
+      const advanced=spec.advanced?' <span class="pill muted">'+esc(staticText("field.advanced","advanced"))+'</span>':'';
+      const desc=settingDescription(spec);
+      return '<div class="field"><label class="field-label" for="setting-'+esc(spec.key)+'">'+esc(settingLabel(spec))+unit+advanced+'</label>'+
+        inputForSetting(spec,value,data.secret_set?.[spec.key])+
+        (desc?'<small>'+esc(desc)+'</small>':'')+'</div>';
+    }).join("")+'</div></div>'
+  ).join("");
+  resetSettingsChecks();
+}
+async function loadOperation(){
+  try{
+    const d=await api("api/operations/current");
+    const op=d.operation;
+    renderLockState(d.lock||{},d.legacy_backup_processes||[]);
+    const badge=document.getElementById("operationBadge");
+    const meta=document.getElementById("operationMeta");
+    const log=document.getElementById("operationLog");
+    if(!op){
+      badge.textContent=staticText("state.idle","Idle");badge.className="pill muted";
+      meta.textContent=d.lock?.busy?((uiLang==="ru"?"Native lock занят: ":"Native lock busy: ")+(d.lock.holder||"")):staticText("state.no_console_operation","No console operation");
+      updateLivePre(log,staticText("state.no_operation_log","No operation log."),{follow:false});
+      return;
+    }
+    badge.textContent=localizedStatus(op.status||"unknown");
+    badge.className="pill "+((op.status==="complete")?"good":(op.status==="failed"?"bad":"warn"));
+    const md=op.metadata||{};
+    meta.textContent=(op.kind||"operation")+" · "+(op.id||"")+
+      (md.target_name?" · target="+md.target_name:"")+
+      (md.vm_names?.length?" · "+md.vm_names.join(", "):"");
+    updateLivePre(
+      log,
+      (op.log_tail||[]).join("\n")||("State: "+(op.status||"unknown"))
+    );
+  }catch(e){console.warn(e)}
+}
+
+async function openRestoreDialog(path,sourceVm){
+  restoreBackupPath=path;
+  restoreSourceVm=sourceVm||"restored-vm";
+  document.getElementById("restoreSource").textContent=uiLang==="ru"?t("restore.source",{path}):("Backup: "+path);
+  document.getElementById("restoreTargetName").value=restoreSourceVm+"_RESTORE_TEST";
+  try{
+    const opts=await api("api/restore-options");
+    const cluster=document.getElementById("restoreCluster");
+    cluster.innerHTML=(opts.clusters||[]).map(x=>'<option value="'+esc(x.name)+'">'+esc(x.name)+'</option>').join("");
+    if(opts.clusters?.some(item=>item.name===opts.defaults?.cluster))cluster.value=opts.defaults.cluster;
+    const storage=document.getElementById("restoreStorage");
+    const updateStorage=()=>{
+      const selected=opts.clusters?.find(item=>item.name===cluster.value);
+      const eligible=new Set(selected?.storage_domain_ids||[]);
+      const domains=(opts.storage_domains||[]).filter(item=>eligible.has(item.id)&&item.name);
+      storage.replaceChildren(
+        new Option(staticText("restore.storage_required","Choose target storage"),""),
+        ...domains.map(item=>new Option(item.name+(item.address?" · "+item.address:""),item.name))
+      );
+      const saved=opts.defaults?.storage_domain;
+      storage.value=domains.some(item=>item.name===saved)?saved:(domains.length===1?domains[0].name:"");
+    };
+    cluster.onchange=updateStorage;
+    updateStorage();
+    document.getElementById("restoreNetworkMode").value=opts.defaults?.network_mode||"isolated";
+    document.getElementById("restoreDialog").showModal();
+  }catch(e){
+    alert(uiLang==="ru"?t("restore.options_error",{error:e.message}):("Cannot load restore options: "+e.message));
+  }
+}
+function restoreRequest(){
+  return {
+    backup_dir:restoreBackupPath,
+    target_name:document.getElementById("restoreTargetName").value.trim(),
+    cluster:document.getElementById("restoreCluster").value,
+    storage_domain:document.getElementById("restoreStorage").value,
+    network_mode:document.getElementById("restoreNetworkMode").value
+  };
+}
+async function restorePreflight(){
+  const req=restoreRequest();
+  if(!req.storage_domain){alert(staticText("restore.storage_required","Choose target storage."));return}
+  const dlg=document.getElementById("outputDialog");
+  document.getElementById("outputTitle").textContent=staticText("restore.preflight_title","Restore preflight");
+  document.getElementById("outputBox").textContent=staticText("restore.preflight_running","Running restore preflight…");
+  dlg.showModal();
+  try{
+    const d=await post("api/actions/restore-preflight",req);
+    document.getElementById("outputBox").textContent=d.output||"(no output)";
+  }catch(e){
+    document.getElementById("outputBox").textContent=uiLang==="ru"?t("common.error",{error:e.message,detail:JSON.stringify(e.data||{},null,2)}):("ERROR: "+e.message+"\n"+JSON.stringify(e.data||{},null,2));
+  }
+}
+async function startRestore(){
+  const req=restoreRequest();
+  if(!req.target_name){alert(staticText("restore.target_required","Target VM name is required."));return}
+  if(!req.storage_domain){alert(staticText("restore.storage_required","Choose target storage."));return}
+  if(!confirm(uiLang==="ru"?t("restore.confirm",{name:req.target_name,storage:req.storage_domain}):("Execute restore to a NEW VM named "+req.target_name+" on "+req.storage_domain+"? The VM will remain DOWN.")))return;
+  try{
+    const d=await post("api/actions/restore",req);
+    document.getElementById("restoreDialog").close();
+    showPage("dashboard");
+    await loadOperation();
+    // One confirmation is enough: operation state is shown on Dashboard.
+  }catch(e){
+    alert(uiLang==="ru"?t("restore.start_error",{error:e.message}):("Cannot start restore: "+e.message));
+  }
+}
+
+function schedulerNotice(text,kind="muted"){
+  const box=document.getElementById("schedulerNotice");
+  box.innerHTML=text?'<div class="notice '+kind+'">'+esc(text)+'</div>':"";
+}
+function collectScheduler(){
+  return {
+    enabled:document.getElementById("schedulerEnabled").checked,
+    time:document.getElementById("schedulerTime").value,
+    timezone:document.getElementById("schedulerTimezone").value.trim(),
+    randomized_delay_seconds:Number(document.getElementById("schedulerRandomDelay").value||0),
+    weekdays:[...document.querySelectorAll("[data-scheduler-day]:checked")].map(x=>x.dataset.schedulerDay)
+  };
+}
+function renderScheduler(data,fillForm=true){
+  schedulerData=data;
+  const cfg=data.config||{};
+  const timer=data.timer||{};
+  const guard=data.migration_guard||{};
+  if(fillForm){
+    document.getElementById("schedulerEnabled").checked=!!cfg.enabled;
+    document.getElementById("schedulerTime").value=cfg.time||"02:00";
+    document.getElementById("schedulerTimezone").value=cfg.timezone||"UTC";
+    document.getElementById("schedulerRandomDelay").value=cfg.randomized_delay_seconds??0;
+    const days=new Set(cfg.weekdays||[]);
+    document.querySelectorAll("[data-scheduler-day]").forEach(x=>x.checked=days.has(x.dataset.schedulerDay));
+  }
+  document.getElementById("schedulerTimerState").textContent=timer.enabled?
+    (uiLang==="ru"?"включён":"enabled"):(uiLang==="ru"?"выключен":"disabled");
+  document.getElementById("schedulerTimerState").className="big "+(timer.enabled?"good":"muted");
+  document.getElementById("schedulerTimerInfo").textContent=(timer.active_state||"unknown")+" · "+(timer.sub_state||"—");
+  document.getElementById("schedulerNextRun").textContent=timer.next_elapse||"—";
+  document.getElementById("schedulerCalendar").textContent=data.calendar||"—";
+  document.getElementById("schedulerLastRun").textContent=timer.last_trigger||"—";
+  document.getElementById("schedulerServiceState").textContent=
+    "service="+(timer.service_active_state||"—")+" · result="+(timer.service_result||"—");
+  renderSchedulerGuard(guard,data.legacy_cron_entries,data.legacy_processes);
+}
+function renderSchedulerGuard(guard,cron=[],processes=[]){
+  document.getElementById("schedulerGuard").hidden=!guard.blocked;
+  const legacy=cron.length||processes.length;
+  document.getElementById("schedulerGuardInfo").textContent=legacy?
+    staticText("scheduler.legacy_detected","A legacy cron entry or backup process was detected."):
+    (guard.reason||guard.backup_config_guard?.reason||"");
+  const details=[
+    ...cron.map(x=>"CRON  "+x.source+":"+x.line_number+"  "+x.line),
+    ...processes.map(x=>"PROC  pid="+x.pid+"  "+x.command)
+  ];
+  const box=document.getElementById("schedulerGuardDetails");
+  box.hidden=!details.length;
+  box.textContent=details.join("\n");
+}
+async function loadScheduler(fillForm=true){
+  try{
+    const d=await api("api/scheduler");
+    renderScheduler(d,fillForm);
+    schedulerNotice(
+      d.in_sync===false?
+        staticText("scheduler.drift","Saved schedule differs from the native systemd timer state. The native timer stays disabled unless scheduling is explicitly migrated to it."):"",
+      d.in_sync===false?"warn":"muted"
+    );
+    return d;
+  }catch(e){
+    schedulerNotice(uiLang==="ru"?t("scheduler.load_error",{error:e.message}):("Cannot load scheduler: "+e.message),"bad");
+    throw e;
+  }
+}
+async function validateScheduler(){
+  try{
+    const d=await post("api/scheduler/validate",{scheduler:collectScheduler()});
+    const guard=d.migration_guard||{};
+    renderSchedulerGuard(guard,guard.legacy_cron_entries,guard.legacy_processes);
+    schedulerNotice(
+      uiLang==="ru"?t("scheduler.validation_ok",{calendar:d.calendar||""}):("Schedule is valid: "+(d.calendar||"")),
+      d.migration_guard?.blocked?"warn":"good"
+    );
+    return d;
+  }catch(e){
+    schedulerNotice(uiLang==="ru"?t("scheduler.validate_error",{error:e.message}):("Scheduler validation failed: "+e.message),"bad");
+    return null;
+  }
+}
+async function saveScheduler(){
+  const cfg=collectScheduler();
+  const validation=await validateScheduler();
+  if(!validation||(cfg.enabled&&validation.migration_guard?.blocked))return;
+  if(cfg.enabled && !confirm(staticText("scheduler.enable_confirm","Enable scheduled backups now?")))return;
+  try{
+    const d=await post("api/scheduler",{scheduler:cfg});
+    renderScheduler(d,true);
+    if(d.audit_written===false)schedulerNotice(staticText("log.audit_error","Settings saved, but the audit entry could not be written."),"warn");
+    else schedulerNotice(staticText("scheduler.saved","Scheduler settings saved."),"good");
+    await loadOverview();
+  }catch(e){
+    schedulerNotice(uiLang==="ru"?t("scheduler.save_error",{error:e.message}):("Cannot save scheduler: "+e.message),"bad");
+  }
+}
+
+async function loadSettings(withOptions=true){
+  const loadId=++settingsLoadId;
+  const status=document.getElementById("settingsOptionsStatus");
+  try{
+    const data=await api("api/settings");
+    if(loadId!==settingsLoadId)return;
+    if(withOptions){
+      try{
+        const options=await api("api/settings/options");
+        if(loadId!==settingsLoadId)return;
+        settingsOptions=options;
+        status.hidden=true;
+      }catch(e){
+        if(loadId!==settingsLoadId)return;
+        settingsOptions=null;
+        status.textContent=staticText("settings.options_error","Engine lists are unavailable. The form shows saved values. Use Reload to retry.");
+        status.hidden=false;
+      }
+    }
+    renderSettings(data);
+    setNotice("");
+  }catch(e){
+    if(loadId===settingsLoadId){
+      setNotice(uiLang==="ru"?t("settings.load_error",{error:e.message}):("Cannot load settings: "+e.message),"bad");
+    }
+  }
+}
+function collectSettings(){
+  const out={};
+  document.querySelectorAll("[data-setting]").forEach(el=>{
+    const key=el.dataset.setting;
+    const type=el.dataset.type;
+    if(type==="bool")out[key]=el.checked;
+    else if(el.multiple)out[key]=[...el.selectedOptions].map(option=>option.value).filter(Boolean);
+    else if(type==="list")out[key]=el.value.split(/[\r\n]+/).map(x=>x.trim()).filter(Boolean);
+    else out[key]=el.value;
+  });
+  return out;
+}
+function resetSettingsChecks(){
+  document.getElementById("settingsChecks").textContent=staticText(
+    "settings.checks_hint","Press Validate to test Engine, repository, network and restore defaults."
+  );
+}
+
+function renderValidationError(e){
+  const errors=e.data?.errors||{};
+  const detail=Object.keys(errors).length?
+    Object.entries(errors).map(([k,v])=>k+": "+v).join("; "):e.message;
+  setNotice(detail,"bad");
+}
+async function validateSettings(){
+  if(!settingsData){await loadSettings()}
+  setNotice(staticText("settings.validating","Validating configuration…"),"warn");
+  try{
+    const settings=collectSettings();
+    const d=await post("api/settings/validate",{settings});
+    if(JSON.stringify(settings)!==JSON.stringify(collectSettings()))return null;
+    renderChecks(d);
+    setNotice(d.ok?staticText("settings.valid","Configuration validation passed."):staticText("settings.invalid_runtime","Validation completed with failed checks."),d.ok?"good":"warn");
+    return d;
+  }catch(e){
+    renderValidationError(e);
+    document.getElementById("settingsChecks").innerHTML="";
+    return null;
+  }
+}
+async function previewRetention(){
+  if(!settingsData){await loadSettings()}
+  try{
+    const d=await post("api/settings/retention-preview",{settings:collectSettings()});
+    const lines=[];
+    lines.push(staticText("retention.title","Retention preview"));
+    lines.push(uiLang==="ru"?t("retention.repo",{root:d.root||"не настроено"}):("Repository: "+(d.root||"not configured")));
+    lines.push(uiLang==="ru"?t("retention.delete",{count:d.delete_count||0}):("Would delete: "+(d.delete_count||0)));
+    lines.push(uiLang==="ru"?t("retention.keep",{count:d.keep_count||0}):("Would keep: "+(d.keep_count||0)));
+    lines.push("");
+    (d.delete||[]).forEach(x=>lines.push("DELETE  "+x.vm_name+"/"+x.directory+"  ["+(x.reasons||[]).join(", ")+"]"));
+    if(!(d.delete||[]).length)lines.push(staticText("retention.none","No completed native backup directories would be deleted."));
+    document.getElementById("outputTitle").textContent=staticText("retention.dialog","Retention preview — no files are changed");
+    document.getElementById("outputBox").textContent=lines.join("\n");
+    document.getElementById("outputDialog").showModal();
+  }catch(e){
+    renderValidationError(e);
+  }
+}
+
+async function saveSettings(){
+  if(!settingsData){await loadSettings()}
+  const draft=collectSettings();
+  const validation=await validateSettings();
+  if(JSON.stringify(draft)!==JSON.stringify(collectSettings()))return;
+  if(!validation||!validation.ok){
+    if(!confirm(staticText("settings.save_anyway","Some runtime checks failed. Save the structurally valid configuration anyway?")))return;
+  }
+  if(!confirm(staticText("settings.save_confirm","Save native backup configuration? The previous file will be backed up first.")))return;
+  setNotice(staticText("settings.saving","Saving configuration…"),"warn");
+  try{
+    const d=await post("api/settings",{settings:draft});
+    renderSettings(d.settings);
+    renderChecks(d.checks);
+    if(d.audit_written===false)setNotice(staticText("log.audit_error","Settings saved, but the audit entry could not be written."),"warn");
+    else setNotice(staticText("settings.saved","Configuration saved atomically.")+(d.backup?(uiLang==="ru"?t("settings.previous",{path:d.backup}):(" Previous version: "+d.backup)):""),"good");
+    await loadOverview();
+  }catch(e){
+    renderValidationError(e);
+  }
+}
+
+async function refreshAll(){
+  if(!signedIn)return;
+  for(const fn of [loadOverview,loadOperation,loadBackups,loadVms,()=>loadLogs(currentLogKind),loadHealth,()=>loadScheduler(true),()=>loadSettings(document.getElementById("settings").classList.contains("active"))]){
+    try{await fn()}catch(e){console.warn(e)}
+  }
+}
+const pageBars=new ResizeObserver(entries=>{
+  for(const {target} of entries){
+    target.parentElement.style.setProperty("--page-bar-height",target.offsetHeight+"px");
+  }
+});
+document.querySelectorAll(".page-bar").forEach(bar=>pageBars.observe(bar));
+document.getElementById("settingsForm").addEventListener("input",()=>{
+  resetSettingsChecks();
+  setNotice("");
+});
+document.getElementById("backupsBody").addEventListener("click",event=>{
+  const button=event.target.closest(".delete-backup-btn");
+  if(button)deleteBackup(button);
+});
+document.getElementById("vmsBody").addEventListener("click",event=>{
+  const checkbox=event.target.closest("tr")?.querySelector(".vm-select");
+  if(!checkbox)return;
+  if(event.target.closest(".vm-backup-btn"))backupSelected([checkbox.value]);
+  else if(!event.target.closest("input, button, a")&&!window.getSelection()?.toString()){
+    checkbox.checked=!checkbox.checked;
+  }
+});
+document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{
+  showPage(b.dataset.page);
+  if(b.dataset.page==="vms")loadVms().catch(console.warn);
+  if(b.dataset.page==="logs")loadLogs().catch(console.warn);
+  if(b.dataset.page==="scheduler")loadScheduler(true).catch(console.warn);
+  if(b.dataset.page==="settings")loadSettings().catch(console.warn);
+});
+startConsole();
+setInterval(()=>{
+  if(!signedIn)return;
+  loadOverview().catch(()=>{});
+  loadBackups().catch(()=>{});
+},30000);
+setInterval(()=>{if(signedIn)loadOperation().catch(()=>{})},3000);
+</script>
+</body>
+</html>

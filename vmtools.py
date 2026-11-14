@@ -271,28 +271,71 @@ class VMTools:
                     config.get_storage_domain(), vm.name, vm_size/1024/1024/1024))
 
     @staticmethod
-    def check_storage_domain_status(api, data_center, storage_domain):
+    def check_storage_domain_status(
+            api, data_center, storage_domain, max_attempts=12, retry_delay=5):
         """
-        Check the state of the export domain
-        :param api: ovirt api module
-        :param data_center: data center name where the storage domain attached
+        Check the state of the export domain.
+
+        oVirt can briefly report an Export Domain as 'maintenance' through the
+        Data Center storage-domain attachment immediately after a successful VM
+        export. Treat a non-active state as transient first and re-read the
+        attachment before failing the whole backup run.
+
+        :param api: ovirtsdk api
+        :param data_center: data center name where the storage domain is attached
         :param storage_domain: storage domain name
-        :return: True if 'active'
-        :raises: Exception if storage domain is not 'active'
+        :param max_attempts: maximum number of status reads before failing
+        :param retry_delay: seconds to wait between status reads
+        :return: True when the domain becomes 'active'
+        :raises: Exception if storage domain remains non-active
         """
         dcs_service = api.system_service().data_centers_service()
         dc = dcs_service.list(search='name=%s' % data_center)[0]
         dc_service = dcs_service.data_center_service(dc.id)
         sds_service = dc_service.storage_domains_service()
-        sd = sds_service.list(search='name=%s' % storage_domain)[0]
 
-        info_msg = (
-            "The storage domain {0} is in state {1}".format(
-                storage_domain, sd.status
+        last_status = None
+
+        for attempt in range(1, max_attempts + 1):
+            # Re-read on every attempt; don't reuse a possibly stale object.
+            sd = sds_service.list(search='name=%s' % storage_domain)[0]
+            last_status = sd.status
+
+            if last_status == types.StorageDomainStatus.ACTIVE:
+                if attempt == 1:
+                    logger.info(
+                        "The storage domain %s is in state %s",
+                        storage_domain, last_status
+                    )
+                else:
+                    logger.info(
+                        "The storage domain %s recovered to state %s "
+                        "after %s attempt(s)",
+                        storage_domain, last_status, attempt
+                    )
+                return True
+
+            if attempt < max_attempts:
+                logger.warning(
+                    "The storage domain %s is temporarily in state %s "
+                    "(attempt %s/%s); retrying in %s seconds",
+                    storage_domain, last_status, attempt, max_attempts,
+                    retry_delay
+                )
+                time.sleep(retry_delay)
+            else:
+                logger.error(
+                    "The storage domain %s is still in state %s "
+                    "after attempt %s/%s",
+                    storage_domain, last_status, attempt, max_attempts
+                )
+
+        raise Exception(
+            "The storage domain {0} remained in state {1} after {2} attempts "
+            "({3} seconds)".format(
+                storage_domain,
+                last_status,
+                max_attempts,
+                (max_attempts - 1) * retry_delay
             )
         )
-        if sd.status == types.StorageDomainStatus.ACTIVE:
-            logger.info(info_msg)
-            return True
-
-        raise Exception(info_msg)
