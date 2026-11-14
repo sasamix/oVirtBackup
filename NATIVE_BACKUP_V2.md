@@ -321,3 +321,26 @@ The current VMBitrix run later sustained only roughly 16-20 MiB/s logical
 progress, which is below the previously measured cold qemu-nbd level. Do not
 blame 10 GbE or the backup NFS target before checking the source NFS mount and
 the specific source volume/snapshot behavior.
+
+
+### Source NFS mount parameters confirmed (2026-11-15)
+
+The source storage domain used by the slow VMBitrix backup is mounted on
+`srv00` as:
+
+`192.168.150.5:/data -> /rhev/data-center/mnt/192.168.150.5:_data`
+
+with:
+
+- NFSv4.2 over TCP;
+- `rsize=1048576`, `wsize=1048576` (1 MiB);
+- `soft,nosharecache,timeo=100,retrans=3`;
+- client address `192.168.150.1`.
+
+Routing to `192.168.150.5` is directly via `gluster-network` using source
+`192.168.150.1`.
+
+Therefore the current 16-20 MiB/s VMBitrix backup slowdown is **not** explained
+by a small NFS rsize/wsize or by the source traffic taking the wrong network.
+Further diagnosis should focus on source-volume behavior and NFS/RPC latency or
+retransmissions during the active qemu-nbd read.
