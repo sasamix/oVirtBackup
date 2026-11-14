@@ -507,3 +507,37 @@ profile during the slow transfer and inspect it with Python `pstats`.
 The current configuration exposes no documented daemon-side
 `workers=N`/multi-process setting. `max_connections=8` should not be
 misinterpreted as eight CPU workers.
+
+
+### Profiler confirms RangeList CPU pathology in ovirt-imageio 2.5.2 (2026-11-15)
+
+A 14.9 second built-in ovirt-imageio profile during the slow VMBitrix transfer
+showed:
+
+- 5,520,967 function calls;
+- `measure.py:61(_merged)`: 7.719 s own time, 13.100 s cumulative;
+- nearly 4,977,061 calls to Python `list.append()`, consuming 5.418 s;
+- `measure.py:42(RangeList.add)`: 12.810 s cumulative;
+- HTTP/TLS/NBD read/write functions consumed only tiny fractions of the profile.
+
+This proves that the one-core CPU saturation is caused by transfer-range
+accounting in `RangeList.add()/RangeList._merged()`, not by TLS encryption,
+network I/O, NFS latency, qemu-nbd CPU, or the backup client.
+
+A fresh upstream oVirt-imageio issue opened on 2026-11-12 describes the same
+pathology: transfers with many non-contiguous requests slow down over time
+because `RangeList.add` re-merges the whole list. The observed production
+profile matches that issue closely.
+
+Operational consequence:
+
+- do not spend more time tuning NFS, ImageIO client worker count, route, buffer
+  sizes, or qemu-nbd cache mode for this specific slowdown;
+- let the current transfer finish if practical;
+- after the transfer, test a patched/fixed `measure.py` implementation in a
+  controlled way before altering the host-wide imageio service;
+- preserve an easy rollback to the packaged 2.5.2 code.
+
+The bug is especially visible on workloads generating many non-contiguous read
+ranges; VMBitrix's almost fully allocated 100 GiB image and its request pattern
+triggered the pathological range-accounting cost.
