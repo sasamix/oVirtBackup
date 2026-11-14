@@ -33,6 +33,7 @@ from urllib.parse import urlsplit, urlunsplit
 import ovirtsdk4 as sdk
 import ovirtsdk4.types as types
 from ovirt_imageio import client as imageio_client
+from ovirt_imageio._internal.backends import http as imageio_http_backend
 
 
 LOG = logging.getLogger("ovirt-native-restore")
@@ -416,6 +417,51 @@ def imageio_host_for_storage_domain(connection, storage_domain_id, cp):
         storage_address,
     )
     return types.Host(id=host.id)
+
+
+@contextmanager
+def imageio_http_read_timeout(cp):
+    """
+    Override ovirt-imageio's HTTP backend read timeout for this native process.
+
+    The installed client defaults to 60 seconds and does not expose this value
+    through upload()/download(). Keep the override local to the active ImageIO
+    operation; worker clones inherit the configured backend timeout.
+    """
+    timeout = cp.getint(
+        "config",
+        "imageio_http_read_timeout",
+        fallback=300,
+    )
+    if timeout < 10 or timeout > 3600:
+        raise RuntimeError(
+            "imageio_http_read_timeout must be between 10 and 3600 seconds"
+        )
+
+    original_init = imageio_http_backend.Backend.__init__
+    signature = inspect.signature(original_init)
+    if "read_timeout" not in signature.parameters:
+        LOG.warning(
+            "Installed ovirt-imageio HTTP backend has no read_timeout "
+            "parameter; cannot override its socket read timeout"
+        )
+        yield
+        return
+
+    def patched_init(backend, *args, **kwargs):
+        kwargs.setdefault("read_timeout", timeout)
+        return original_init(backend, *args, **kwargs)
+
+    LOG.info(
+        "ImageIO HTTP read timeout: %d seconds "
+        "(upstream default is 60 seconds)",
+        timeout,
+    )
+    imageio_http_backend.Backend.__init__ = patched_init
+    try:
+        yield
+    finally:
+        imageio_http_backend.Backend.__init__ = original_init
 
 
 @contextmanager
@@ -1103,17 +1149,18 @@ def upload_image(
             kwargs["disk_is_zero"] = False
 
         LOG.info("Uploading %s -> disk %s", path, disk_id)
-        with temporary_dns_override(dns_host, dns_ip):
-            imageio_client.upload(
-                str(path),
-                transfer_url,
-                cp.get(
-                    "config",
-                    "ca_file",
-                    fallback="/etc/pki/ovirt-engine/ca.pem",
-                ),
-                **kwargs
-            )
+        with imageio_http_read_timeout(cp):
+            with temporary_dns_override(dns_host, dns_ip):
+                imageio_client.upload(
+                    str(path),
+                    transfer_url,
+                    cp.get(
+                        "config",
+                        "ca_file",
+                        fallback="/etc/pki/ovirt-engine/ca.pem",
+                    ),
+                    **kwargs
+                )
     except Exception:
         LOG.exception(
             "Upload failed for disk %s; cancelling ImageTransfer %s",
