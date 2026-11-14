@@ -228,14 +228,25 @@ that `enp8s0` carried nearly symmetric traffic:
 - average TX: about 26.9 MiB/s;
 - observed peaks: roughly 47.5 MiB/s RX and 55.3 MiB/s TX.
 
-This strongly suggests that the Engine host is acting as a relay between two
-network flows on the same interface: receiving ImageIO data from the oVirt host
-and writing the sparse RAW backup to the remote `/mnt/ovirt-backup` target
-over NFS. In this situation the same physical NIC handles both directions at
-once, so backup throughput must be evaluated as a two-sided path, not only as
-the ImageIO receive rate.
+This confirms that the Engine host is acting as a relay between two network
+flows on the same interface: receiving ImageIO data from the oVirt host and
+writing the sparse RAW backup to the remote `/mnt/ovirt-backup` target over
+NFS.
 
-The near-equal RX/TX rates also explain why the logical backup progress can
-settle around 40-50 MiB/s while each physical network direction may average
-less over short samples. Confirm interface routing and mount paths before
-changing ImageIO worker counts or proxy settings.
+Important correction: on a full-duplex 10 GbE link, simultaneous RX and TX on
+the same NIC do **not** inherently halve throughput. The NIC can receive and
+transmit concurrently. Therefore the observed ~27 MiB/s RX and ~27 MiB/s TX
+does not by itself identify the NIC as the bottleneck.
+
+Routing was confirmed:
+- `192.168.150.1` (srv00 ImageIO path) uses `enp8s0` with source
+  `192.168.150.47`;
+- `/mnt/ovirt-backup` is NFSv4 from
+  `192.168.150.6:/volume1/ovirt-backup`, also on the 192.168.150.0/24
+  storage network.
+
+The next performance diagnosis should separately measure:
+1. sequential write throughput from Engine to the NFS backup target;
+2. source read throughput from the oVirt/Gluster backing storage;
+3. ImageIO/qemu-nbd behavior after EXTENTS.
+Do not assume the shared Engine NIC is the bottleneck without these tests.
