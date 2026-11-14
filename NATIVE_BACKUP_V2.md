@@ -601,3 +601,32 @@ systemctl restart ovirt-imageio
 Next validation must repeat the same VMBitrix FULL backup without unrelated
 configuration changes and compare sustained throughput and ovirt-imageio CPU
 utilization against the pre-patch run.
+
+
+### RangeList patch validation: major throughput recovery (2026-11-15)
+
+A repeat FULL backup of the same `VMBitrix` disk on the patched `srv00`
+host showed a dramatic improvement.
+
+Post-patch progress:
+
+- 1.13 GiB: 115.7 MiB/s
+- 5.02 GiB: 103.6 MiB/s
+- 10.00 GiB: 100.8 MiB/s
+- 15.00 GiB: 104.4 MiB/s
+- 18.02 GiB: 104.1 MiB/s
+
+The rate remained approximately 100-104 MiB/s through 18% of the 100 GiB
+disk, with no progressive collapse.
+
+Pre-patch comparison for the same VM/disk:
+
+- around 10%: ~30.6 MiB/s;
+- around 15%: ~25.1 MiB/s;
+- around 18%: ~21 MiB/s;
+- later fell to ~15-20 MiB/s.
+
+This is strong evidence that the `RangeList.add()/RangeList._merged()`
+pathology in ovirt-imageio 2.5.2 was the primary cause of the progressive
+throughput degradation. Continue the run and capture ovirt-imageio CPU usage
+post-patch to confirm that the previous one-core saturation is also gone.
