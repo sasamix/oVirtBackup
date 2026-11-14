@@ -217,3 +217,25 @@ statistics to determine actual transport throughput and destination write rate.
 The `vnet*` interface `%ifutil` values may be nonsensical because virtual
 interfaces do not expose a meaningful physical link speed; use byte rates
 (rxkB/s/txkB/s) and the physical/logical-network interfaces instead.
+
+
+### Engine interface throughput observation (2026-11-15)
+
+During the same `VMBitrix` backup, `sar -n DEV 1 5` on the Engine host showed
+that `enp8s0` carried nearly symmetric traffic:
+
+- average RX: about 27.0 MiB/s;
+- average TX: about 26.9 MiB/s;
+- observed peaks: roughly 47.5 MiB/s RX and 55.3 MiB/s TX.
+
+This strongly suggests that the Engine host is acting as a relay between two
+network flows on the same interface: receiving ImageIO data from the oVirt host
+and writing the sparse RAW backup to the remote `/mnt/ovirt-backup` target
+over NFS. In this situation the same physical NIC handles both directions at
+once, so backup throughput must be evaluated as a two-sided path, not only as
+the ImageIO receive rate.
+
+The near-equal RX/TX rates also explain why the logical backup progress can
+settle around 40-50 MiB/s while each physical network direction may average
+less over short samples. Confirm interface routing and mount paths before
+changing ImageIO worker counts or proxy settings.
