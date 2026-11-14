@@ -873,8 +873,9 @@ class LogProgress:
         self.percent_step = max(1, int(percent_step))
         self._size = None
         self._done = 0
-        self._started = time.monotonic()
-        self._last_log = self._started
+        self._created = time.monotonic()
+        self._started = None
+        self._last_log = self._created
         self._last_percent = -self.percent_step
         self._lock = threading.Lock()
 
@@ -886,10 +887,16 @@ class LogProgress:
     def size(self, value):
         with self._lock:
             self._size = value
+            now = time.monotonic()
+            if self._started is None:
+                self._started = now
+                self._last_log = now
             if value:
                 LOG.info(
-                    "Download size for disk %s: %.2f GiB",
+                    "ImageIO metadata/extents ready for disk %s after %.1fs; "
+                    "download size: %.2f GiB",
                     self.disk_id,
+                    now - self._created,
                     value / 1024**3,
                 )
 
@@ -897,6 +904,9 @@ class LogProgress:
         with self._lock:
             self._done += amount
             now = time.monotonic()
+            if self._started is None:
+                self._started = now
+                self._last_log = now
             elapsed = max(now - self._started, 0.001)
             rate = self._done / elapsed
 
@@ -939,8 +949,7 @@ class LogProgress:
             self._last_log = now
 
 
-def create_transfer(
-        connection, backup_id, disk_id, cp, storage_domain_id=None):
+def create_transfer(connection, backup_id, disk_id, cp):
     system = connection.system_service()
     transfers = system.image_transfers_service()
     policy = cp.get(
