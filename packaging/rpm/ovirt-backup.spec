@@ -1,5 +1,5 @@
 Name:           ovirt-backup-console
-Version:        %{?version_override}%{!?version_override:0.5.0}
+Version:        %{?version_override}%{!?version_override:0.5.1}
 Release:        0.1%{?dist}
 Summary:        Native oVirt VM backup tool and local web console
 License:        MIT
@@ -119,6 +119,11 @@ fi
 %dir %attr(0750,ovirt-backup,ovirt-backup) %{_localstatedir}/log/ovirt-backup
 
 %changelog
+* Sun Nov 15 2026 sasamix <asm@pioner.kz> - 0.5.1-0.1
+- Work around ovirt-imageio 60 second HTTP EXTENTS read timeout.
+- Use Engine-selected live VM backup host instead of storage-domain host affinity.
+- Separate ImageIO metadata latency from actual transfer throughput.
+
 * Fri Nov 13 2026 oVirtBackup contributors - 0.5.0-0.1
 - Prepare the native console for new installations and preserve existing schedules.
 - Reuse Engine sessions, add repository deletion and a filterable audit log.
