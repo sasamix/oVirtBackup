@@ -948,15 +948,14 @@ def create_transfer(
     )
     timeout = cp.getint("config", "imageio_timeout", fallback=120)
 
-    transfer_host = imageio_host_for_storage_domain(
-        connection, storage_domain_id, cp
-    )
-
+    # For live VM Backup, Engine owns the backup host and backup URL.
+    # Do not force a transfer host based on storage.address: the disk data is
+    # exposed by the VM backup host, which can legitimately differ from the
+    # NFS/storage server hosting the storage domain.
     transfer = transfers.add(
         types.ImageTransfer(
             disk=types.Disk(id=disk_id),
             backup=types.Backup(id=backup_id),
-            host=transfer_host,
             direction=types.ImageTransferDirection.DOWNLOAD,
             format=types.DiskFormat.RAW,
             timeout_policy=types.ImageTransferTimeoutPolicy(policy),
@@ -1079,8 +1078,7 @@ def finalize_transfer(connection, transfer, disk_id, cp):
             )
 
 
-def download_disk(
-        connection, backup, disk, disk_dir, cp, storage_domain_id=None):
+def download_disk(connection, backup, disk, disk_dir, cp):
     disk_id = disk.id
     # FULL backups are stored as sparse RAW. This avoids qcow2 random-read
     # amplification over NFS during restore. Incremental backups require qcow2
@@ -1091,7 +1089,6 @@ def download_disk(
         backup.id,
         disk_id,
         cp,
-        storage_domain_id=storage_domain_id,
     )
     download_started = time.monotonic()
 
@@ -1264,22 +1261,12 @@ def backup_vm(connection, base, vm_name, cp, dry_run):
             storage_ids,
         )
 
-        # Resolve the preferred ImageTransfer host during preflight as well,
-        # so --dry-run verifies per-disk storage/host mapping without moving
-        # any backup data.
-        if len(storage_ids) == 1:
-            imageio_host_for_storage_domain(
-                connection,
-                storage_ids[0],
-                cp,
-            )
-        else:
-            LOG.info(
-                "Disk %s has %d source storage domains; "
-                "Engine will select ImageTransfer host",
-                disk["id"],
-                len(storage_ids),
-            )
+        LOG.info(
+            "Live backup disk %s source storage_domains=%r; "
+            "Engine will use the VM backup host for ImageTransfer",
+            disk["id"],
+            storage_ids,
+        )
 
     check_destination_space(base, disk_meta, cp)
 
@@ -1343,6 +1330,36 @@ def backup_vm(connection, base, vm_name, cp, dry_run):
         )
         LOG.info("Engine backup %s READY", backup.id)
 
+        backup_host_id = getattr(
+            getattr(backup, "host", None),
+            "id",
+            None,
+        )
+        if backup_host_id:
+            try:
+                backup_host = (
+                    system.hosts_service()
+                    .host_service(backup_host_id)
+                    .get()
+                )
+                LOG.info(
+                    "Live VM backup host: %s (%s)",
+                    getattr(backup_host, "name", backup_host_id),
+                    backup_host_id,
+                )
+                manifest["backup_host_id"] = backup_host_id
+                manifest["backup_host_name"] = getattr(
+                    backup_host,
+                    "name",
+                    None,
+                )
+            except Exception:
+                LOG.exception(
+                    "Cannot resolve live VM backup host %s",
+                    backup_host_id,
+                )
+                manifest["backup_host_id"] = backup_host_id
+
         manifest["backup_id"] = backup.id
         manifest["from_checkpoint_id"] = getattr(
             backup, "from_checkpoint_id", None
@@ -1375,14 +1392,12 @@ def backup_vm(connection, base, vm_name, cp, dry_run):
         for disk in backup_disks:
             source_meta = disk_meta_by_id.get(disk.id) or {}
             storage_ids = source_meta.get("storage_domain_ids") or []
-            storage_domain_id = storage_ids[0] if len(storage_ids) == 1 else None
-            if len(storage_ids) != 1:
-                LOG.info(
-                    "Disk %s source storage domains=%r; "
-                    "Engine will select download ImageTransfer host",
-                    disk.id,
-                    storage_ids,
-                )
+            LOG.info(
+                "Downloading backup disk %s source storage_domains=%r "
+                "via Engine-selected live backup host",
+                disk.id,
+                storage_ids,
+            )
 
             manifest["files"].append(
                 download_disk(
@@ -1391,7 +1406,6 @@ def backup_vm(connection, base, vm_name, cp, dry_run):
                     disk,
                     disks_dir,
                     cp,
-                    storage_domain_id=storage_domain_id,
                 )
             )
             write_manifest(work / "manifest.json", manifest)
