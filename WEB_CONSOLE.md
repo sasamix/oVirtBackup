@@ -306,3 +306,16 @@ comments, removes, signals or stops legacy cron/processes.
 This makes cutover an explicit final migration action: first disable the exact
 legacy cron entry, wait for any old backup process to finish, then enable the
 native timer from the Scheduler page.
+
+
+## ImageIO large-disk metadata timeout
+
+The console exposes `imageio_http_read_timeout` (default 300 seconds) as an
+advanced Image transfer setting. It controls the socket read timeout used by
+the ovirt-imageio HTTP backend during large EXTENTS/metadata requests. This is
+separate from `imageio_timeout`, which controls Engine ImageTransfer
+initialization/finalization.
+
+For live VM Backup downloads, Engine chooses the VM backup host. The client
+does not force a download host from the disk storage domain. The returned
+ImageTransfer host is then routed over the configured `imageio_network`.
