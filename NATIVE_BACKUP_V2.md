@@ -195,3 +195,25 @@ VM-backup finalization moved it through `REMOVING_SNAPSHOT` and finally to
 During diagnosis, Engine and `srv00` clocks were offset by about 32 seconds.
 When correlating Engine and host logs, compare transfer IDs and event order, not
 wall-clock timestamps alone.
+
+
+### Throughput interpretation: logical progress vs physical network (2026-11-15)
+
+During the fixed `VMBitrix` backup, the native progress logger later reported
+about 44 MiB/s. A simultaneous `sar -n DEV 1 5` measurement on
+`srv00.local.pioner.kz` showed only about 10.2 MiB/s RX and 10.1 MiB/s TX on
+`gluster-network` on average.
+
+This is expected for sparse RAW download: the progress callback advances by
+logical image extents processed, while zero/hole extents can be skipped instead
+of being transferred as physical payload. Therefore the displayed
+`Download progress ... MiB/s` is a **logical virtual-image throughput**, not
+a direct measurement of network bandwidth.
+
+Do not diagnose a 44 MiB/s progress value as a 44 MiB/s network bottleneck
+without simultaneous interface measurements. Use host and Engine interface
+statistics to determine actual transport throughput and destination write rate.
+
+The `vnet*` interface `%ifutil` values may be nonsensical because virtual
+interfaces do not expose a meaningful physical link speed; use byte rates
+(rxkB/s/txkB/s) and the physical/logical-network interfaces instead.
