@@ -295,3 +295,29 @@ Do not infer a fixed 5-6 MiB/s or 27 MiB/s network/storage ceiling from short
 samples of this sparse FULL backup. Use a clean sequential NFS write benchmark
 after the backup completes, plus final backup duration and actual allocated
 backup size, to separate repository throughput from sparse-image behavior.
+
+
+### Active qemu-nbd source path for VMBitrix (2026-11-15)
+
+During the slow `VMBitrix` FULL backup, the active VDSM ImageTransfer process
+on `srv00` was:
+
+`/usr/bin/qemu-nbd --socket /run/vdsm/nbd/3d5f6732-e217-40ca-af77-4bae0a28d922.sock --persistent --shared=8 --export-name= --cache=none --aio=native --read-only json:{"driver":"raw","file":{"driver":"file","filename":"/rhev/data-center/mnt/192.168.150.5:_data/bd68a843-42c8-46ab-89bf-19d60a268401/images/3a10c741-698f-4d50-b871-83774ea77026/192eecbd-ed4f-44bb-9334-0fa093275b57"}}`
+
+Therefore the actual source path is the storage-domain file mounted from
+`192.168.150.5`, read by qemu-nbd with `cache=none`, `aio=native`,
+`read-only`, and up to 8 shared NBD clients. The configured
+`gluster-network` controls the ImageIO transfer route from `srv00` to the
+Engine; it does not mean the source disk itself is read through Gluster.
+
+Previous performance tests established that the underlying NFS path can be much
+faster than qemu-nbd cold reads: raw physical NFS reads were about 397 MB/s,
+while qemu-nbd `cache=none,aio=native` cold reads were about 54-56 MiB/s and
+a repeated cache-warmed pass reached about 260.8 MiB/s. A
+`cache=writeback,aio=threads` run measured about 153.2 MiB/s, but the A/B/A
+sequence showed cache warming, not a proven cache-mode improvement.
+
+The current VMBitrix run later sustained only roughly 16-20 MiB/s logical
+progress, which is below the previously measured cold qemu-nbd level. Do not
+blame 10 GbE or the backup NFS target before checking the source NFS mount and
+the specific source volume/snapshot behavior.
