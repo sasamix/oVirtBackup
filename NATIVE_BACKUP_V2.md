@@ -268,3 +268,30 @@ Console v0.5.2 therefore:
   manually scrolled position.
 
 The same update helper is used for the dedicated Logs page.
+
+
+### NFS mount and bursty sparse-transfer observation (2026-11-15)
+
+A later 10-second Engine sample during the same `VMBitrix` backup showed a
+much lower average on `enp8s0`:
+
+- average RX: about 5.5 MiB/s;
+- average TX: about 5.5 MiB/s;
+- a one-second burst reached about 29.6 MiB/s in each direction.
+
+RX and TX remained almost identical, confirming that Engine receives ImageIO
+payload and immediately writes it to the backup NFS target. The large
+second-to-second variation is consistent with sparse/zero extent processing:
+logical backup progress can advance while little or no payload is physically
+transferred, then burst when an allocated extent is read and written.
+
+The backup NFS mount was confirmed as:
+
+`192.168.150.6:/volume1/ovirt-backup` mounted on `/mnt/ovirt-backup`
+using NFSv4.1 over TCP with `rsize=131072`, `wsize=131072`,
+`hard,timeo=600,retrans=2`, client address `192.168.150.47`.
+
+Do not infer a fixed 5-6 MiB/s or 27 MiB/s network/storage ceiling from short
+samples of this sparse FULL backup. Use a clean sequential NFS write benchmark
+after the backup completes, plus final backup duration and actual allocated
+backup size, to separate repository throughput from sparse-image behavior.
