@@ -1146,7 +1146,7 @@ async function loadScheduler(fillForm=true){
     renderScheduler(d,fillForm);
     schedulerNotice(
       d.in_sync===false?
-        staticText("scheduler.drift","Saved scheduler state differs from the actual systemd timer state. Press Save to reconcile."):"",
+        staticText("scheduler.drift","Saved schedule differs from the native systemd timer state. The native timer stays disabled unless scheduling is explicitly migrated to it."):"",
       d.in_sync===false?"warn":"muted"
     );
     return d;
