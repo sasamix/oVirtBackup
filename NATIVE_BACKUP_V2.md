@@ -653,3 +653,37 @@ RangeList growth no longer causes throughput decay.
 A short post-patch built-in profile should be used to confirm that
 `measure.py:_merged` and millions of `list.append()` calls are no longer the
 dominant CPU consumers.
+
+
+### Post-patch profiler confirms RangeList pathology removed (2026-11-15)
+
+A second built-in `ovirt-imageio` profile was captured during the repeat
+VMBitrix backup after applying the optimized `RangeList.add()`.
+
+Profile duration: 16.934 seconds.
+
+Before patch:
+
+- `measure.py:_merged`: 13.100 s cumulative;
+- Python `list.append()`: 4,977,061 calls / 5.418 s;
+- ovirt-imageio was effectively saturated by range bookkeeping while transfer
+  throughput progressively collapsed.
+
+After patch:
+
+- `measure.py:_merged`: 0.367 s cumulative and only one significant call;
+- Python `list.append()`: about 134,936 calls / 0.197 s;
+- dominant internal-time function became TLS socket output:
+  `_ssl._SSLSocket.write`: 5.091 s;
+- NBD/read pipeline functions now dominate cumulative time normally:
+  `images.Handler.get`, `ops.Read.run`, `ops.Read._read_chunk`;
+- backup throughput remained around 100 MiB/s instead of progressively falling
+  toward 15-20 MiB/s.
+
+This confirms the custom RangeList patch removes the pathological whole-list
+remerge cost. The remaining CPU load is normal transfer/TLS/NBD work rather
+than runaway range accounting.
+
+The patch should now be treated as validated on srv00. Before rolling it to
+other oVirt hosts, verify the same packaged ovirt-imageio version and preserve
+the packaged measure.py for rollback on each host.
