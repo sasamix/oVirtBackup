@@ -554,3 +554,17 @@ However, the owning VM Backup object
 the first cleanup script. This is **not** a fully cleaned state: do not start
 another backup until this VM Backup is explicitly finalized and reaches a
 terminal phase (or is removed), otherwise a backup/snapshot lock can remain.
+
+
+### Aborted VMBitrix cleanup completed (2026-11-15)
+
+The intentionally aborted VMBitrix backup
+`92187b59-5df9-46c9-ac34-f4143b634f72` reached terminal phase
+`succeeded` after ImageTransfer cancellation and snapshot removal.
+
+This confirms Engine cleanup completed and the VM backup lock/snapshot was
+released. The incomplete repository directory had already been deleted.
+
+A terminal `succeeded` phase here means Engine successfully finished cleanup;
+it does not mean the aborted backup payload is valid, because the partial
+repository data was intentionally removed.
