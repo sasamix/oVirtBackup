@@ -400,3 +400,20 @@ Historical comparison retained from previous tests:
 
 Do not repeat NFS rsize/wsize, routing, or retransmission tuning unless new
 evidence contradicts these measurements.
+
+
+### ImageIO worker concurrency confirmed during slow VMBitrix backup (2026-11-15)
+
+On the Engine host, the active backup Python process had four simultaneous
+ESTABLISHED TCP connections to `srv00:54322`, plus one older CLOSE-WAIT
+connection:
+
+- four ESTABLISHED connections from `192.168.150.47` to
+  `192.168.150.1:54322`;
+- process: the active `backup_native.py` Python process;
+- configured `imageio_max_workers=4`.
+
+Therefore the slowdown is **not** caused by `imageio_max_workers=4` silently
+collapsing to one HTTP connection. The next diagnostic target is the path
+between the four ImageIO workers and qemu-nbd/NBD scheduling, plus destination
+sparse-file write serialization or CPU limits.
