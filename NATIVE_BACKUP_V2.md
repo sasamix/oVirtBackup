@@ -630,3 +630,26 @@ This is strong evidence that the `RangeList.add()/RangeList._merged()`
 pathology in ovirt-imageio 2.5.2 was the primary cause of the progressive
 throughput degradation. Continue the run and capture ovirt-imageio CPU usage
 post-patch to confirm that the previous one-core saturation is also gone.
+
+
+### Post-patch ovirt-imageio CPU behavior (2026-11-15)
+
+During the repeat VMBitrix backup after the RangeList patch, ovirt-imageio
+PID 2785633 averaged approximately:
+
+- user CPU: 67.1%;
+- system CPU: 22.9%;
+- total CPU: 90.0%;
+- iodelay: 0.
+
+Short samples ranged from roughly 69% to 112% total CPU while backup throughput
+remained around 100-104 MiB/s.
+
+This is materially different from the pre-patch behavior, where the daemon sat
+at about 99.5% CPU while throughput progressively collapsed toward 15-20 MiB/s.
+The post-patch daemon still uses about one core worth of CPU, but the pathological
+RangeList growth no longer causes throughput decay.
+
+A short post-patch built-in profile should be used to confirm that
+`measure.py:_merged` and millions of `list.append()` calls are no longer the
+dominant CPU consumers.
