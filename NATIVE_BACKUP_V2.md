@@ -417,3 +417,29 @@ Therefore the slowdown is **not** caused by `imageio_max_workers=4` silently
 collapsing to one HTTP connection. The next diagnostic target is the path
 between the four ImageIO workers and qemu-nbd/NBD scheduling, plus destination
 sparse-file write serialization or CPU limits.
+
+
+### Process utilization during slow VMBitrix backup (2026-11-15)
+
+During the slow interval:
+
+On `srv00`, active qemu-nbd PID 2758438 averaged:
+
+- CPU: about 1.1%;
+- disk/NFS read reported by pidstat: about 4376 kB/s;
+- iodelay: 0;
+- no major faults.
+
+On Engine, active backup Python PID 1289616 averaged:
+
+- CPU: about 12.8%;
+- iodelay: 0;
+- pidstat block I/O counters near zero (the output file is on NFS, so these
+  per-process block-I/O counters are not a reliable measure of NFS socket
+  traffic).
+
+This rules out CPU saturation in qemu-nbd or the backup Python process as the
+primary cause of the 16-20 MiB/s run. qemu-nbd is simply being asked to read
+too little data on average. The remaining key intermediary to measure is the
+`ovirt-imageio` daemon process that accepts the four HTTP worker connections
+and issues NBD requests.
