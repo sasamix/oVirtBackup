@@ -250,3 +250,21 @@ The next performance diagnosis should separately measure:
 2. source read throughput from the oVirt/Gluster backing storage;
 3. ImageIO/qemu-nbd behavior after EXTENTS.
 Do not assume the shared Engine NIC is the bottleneck without these tests.
+
+
+### Live log refresh behavior (console v0.5.2)
+
+The Dashboard operation log is polled every 3 seconds. The browser must not
+rewrite the log DOM when the returned text is unchanged, because assigning
+`textContent` destroys an active text selection and makes copying long logs
+difficult.
+
+Console v0.5.2 therefore:
+
+- updates a live log only when its text actually changed;
+- defers a log DOM update while the user has an active selection inside it;
+- catches up automatically on the next poll after the selection is released;
+- auto-scrolls only when the viewer was already near the bottom, preserving a
+  manually scrolled position.
+
+The same update helper is used for the dedicated Logs page.
