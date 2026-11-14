@@ -60,15 +60,19 @@ IP conflicts.
 
 ## ImageTransfer host selection
 
-When `imageio_network` is configured, native backup/restore automatically
-selects the oVirt host closest to each host-local NFS storage domain:
+When `imageio_network` is configured, native backup/restore routes the
+ImageTransfer endpoint over that logical network while preserving the host
+FQDN for TLS verification.
 
-- backup: each source disk is evaluated separately;
-- restore: the selected target storage domain is evaluated;
-- `storage.address` is matched to the IPv4 address of an UP oVirt host on
-  `imageio_network`;
-- if there is no unique match (for example an external Synology NFS server),
-  host selection is left to Engine instead of guessing.
+For live VM Backup downloads, Engine owns the VM backup host and the per-disk
+backup URL. The native client therefore does **not** force a host from
+`storage.address`; it follows the actual ImageTransfer host returned by
+Engine and routes that host over `imageio_network`.
+
+For restore uploads, the selected target storage domain is evaluated:
+`storage.address` is matched to the IPv4 address of an UP oVirt host on
+`imageio_network`. If there is no unique match (for example an external
+Synology NFS server), host selection is left to Engine instead of guessing.
 
 No fixed `imageio_download_host` or `imageio_upload_host` setting is needed.
 
@@ -107,3 +111,16 @@ Native restore supports four NIC modes:
   same Engine.
 
 The VM is never started automatically in any mode.
+
+
+## ImageIO HTTP EXTENTS timeout
+
+The ovirt-imageio HTTP backend currently defaults to a 60 second socket read
+timeout. Its public `download()` / `upload()` API does not expose that
+timeout, and large image EXTENTS requests can legitimately take longer before
+data transfer begins.
+
+Native backup/restore use `imageio_http_read_timeout` (default 300 seconds) to
+override the HTTP backend read timeout only inside the native process. The
+system ovirt-imageio package is not modified. The backup log reports metadata /
+EXTENTS latency separately from actual data-transfer throughput.
