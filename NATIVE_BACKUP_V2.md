@@ -370,3 +370,33 @@ retransmission problem, but they are cumulative over the long-lived mount and
 cannot diagnose the current slow interval. Use interval-based `nfsiostat` or
 equivalent measurements during the active backup before attributing the
 slowdown to source NFS latency.
+
+
+### Interval NFS behavior during slow VMBitrix backup (2026-11-15)
+
+A 10-second `nfsiostat 1 10` sample on `srv00` for the source mount
+`192.168.150.5:/data` showed:
+
+- read throughput mostly around 1-3 MiB/s with short bursts around 11-12 MiB/s;
+- read ops generally around 23-34 ops/s;
+- average read RTT typically about 0.3-1.2 ms;
+- average execution typically about 0.4-1.4 ms;
+- retransmissions: 0%;
+- RPC backlog: 0.
+
+This rules out an obvious source-NFS latency, retransmission, or server backlog
+problem during the sampled interval. The source server is responding quickly,
+but the client side is issuing relatively little read work. Combined with the
+nearly fully allocated VMBitrix volume and the much faster historical raw NFS
+and qemu-nbd tests, the next diagnostic target is ImageIO/qemu-nbd request
+concurrency rather than NFS transport tuning.
+
+Historical comparison retained from previous tests:
+
+- RAW FULL backup download: about 75.93 GiB in 299.152 s, approximately 260 MiB/s;
+- cold qemu-nbd `cache=none,aio=native`: about 54-56 MiB/s;
+- cache-warmed repeat: about 260.8 MiB/s;
+- current VMBitrix sustained logical progress: roughly 16-20 MiB/s.
+
+Do not repeat NFS rsize/wsize, routing, or retransmission tuning unless new
+evidence contradicts these measurements.
