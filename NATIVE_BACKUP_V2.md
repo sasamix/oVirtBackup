@@ -124,3 +124,74 @@ Native backup/restore use `imageio_http_read_timeout` (default 300 seconds) to
 override the HTTP backend read timeout only inside the native process. The
 system ovirt-imageio package is not modified. The backup log reports metadata /
 EXTENTS latency separately from actual data-transfer throughput.
+
+
+## Confirmed ImageTransfer EXTENTS failure and fix (2026-11-15)
+
+Observed failure on `VMBitrix` (100 GiB disk) while downloading a live VM
+backup from `srv00.local.pioner.kz` over `gluster-network`.
+
+Confirmed sequence:
+
+1. Engine created the VM backup and reached `BackupPhase.READY`.
+2. Engine selected `srv00` as the live-backup ImageTransfer host.
+3. Direct ImageIO routing correctly used
+   `srv00.local.pioner.kz:54322` / `192.168.150.1:54322`; proxy fallback
+   remained disabled.
+4. ImageIO started a `zero` EXTENTS request before data download.
+5. The ImageTransfer ticket had Engine's default
+   `inactivity_timeout=60`, while the EXTENTS calculation took longer than
+   60 seconds.
+6. Engine removed/cancelled the transfer while EXTENTS was still running.
+   VDSM then stopped the corresponding `qemu-nbd` service.
+7. ImageIO consequently logged:
+   `ovirt_imageio._internal.nbd.ProtocolError: Server closed the connection`.
+   This was a consequence of transfer removal, not an independent qemu-nbd
+   crash.
+8. The backup client then received
+   `Server failed to perform the request, check logs`.
+
+Important distinction: `imageio_http_read_timeout=300` was already working
+and was not the cause. The failing timeout was the Engine ImageTransfer client
+inactivity timeout.
+
+Fix implemented in `backup_native.py`:
+
+- new setting `imageio_inactivity_timeout`, default 300 seconds;
+- pass it explicitly as `ImageTransfer.inactivity_timeout` when creating
+  download transfers;
+- keep `imageio_http_read_timeout=300` for long HTTP EXTENTS responses;
+- do not enable ImageIO proxy fallback; direct `gluster-network` routing is
+  preserved.
+
+Validation after the fix:
+
+- ImageTransfer log:
+  `inactivity_timeout=300s timeout_policy=cancel`;
+- EXTENTS completed successfully after approximately **201.5 seconds**;
+- download then started normally at roughly 80-100 MiB/s;
+- therefore a 60 second inactivity timeout is insufficient for this storage
+  layout, and 300 seconds should not be reduced without new measurements.
+
+### Failed-transfer cleanup
+
+A second issue was confirmed during the same incident. On download failure the
+old code called `ImageTransfer.cancel()` and immediately propagated the
+exception. The VM-backup error handler then called `backup_service.finalize()`
+while the ImageTransfer was still active, producing HTTP 409:
+
+`Cannot stop VM backup. There is an active image transfer for VM backup`.
+
+The cleanup path now waits after `cancel()` until the ImageTransfer either
+reaches a finished phase or disappears before VM backup finalization proceeds.
+
+A stale backup from the pre-fix run remained in `READY` and kept the VM disk
+locked. After its failed ImageTransfer had reached `finished_failure`, manual
+VM-backup finalization moved it through `REMOVING_SNAPSHOT` and finally to
+`succeeded`, releasing the disk lock.
+
+### Time correlation note
+
+During diagnosis, Engine and `srv00` clocks were offset by about 32 seconds.
+When correlating Engine and host logs, compare transfer IDs and event order, not
+wall-clock timestamps alone.
