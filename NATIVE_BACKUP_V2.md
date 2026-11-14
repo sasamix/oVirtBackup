@@ -481,3 +481,29 @@ The measurement proves a one-core CPU bottleneck; it does not by itself prove
 whether the exact implementation cause is the Python GIL, another serialization
 point, or CPU-heavy processing in the daemon. Determine that from the installed
 ovirt-imageio version/source before changing production service architecture.
+
+
+### ovirt-imageio 2.5.2 daemon configuration and built-in profiler (2026-11-15)
+
+Installed host packages:
+
+- `ovirt-imageio-daemon-2.5.2-1.el9.x86_64`
+- `ovirt-imageio-common-2.5.2-1.el9.x86_64`
+
+The effective daemon configuration on `srv00` confirms:
+
+- `daemon.max_connections = 8` (connection limit, not CPU worker processes);
+- `backend_file.buffer_size = 8388608` (8 MiB);
+- `backend_http.buffer_size = 8388608` (8 MiB);
+- `backend_nbd.buffer_size = 8388608` (8 MiB);
+- remote port 54322 with TLS enabled;
+- profiler output path: `/run/ovirt-imageio/profile`.
+
+Upstream ovirt-imageio includes built-in profiling support via
+`ovirt-imageioctl start-profile` and `ovirt-imageioctl stop-profile`.
+This is preferable to guessing about the one-core hotspot: capture a short
+profile during the slow transfer and inspect it with Python `pstats`.
+
+The current configuration exposes no documented daemon-side
+`workers=N`/multi-process setting. `max_connections=8` should not be
+misinterpreted as eight CPU workers.
