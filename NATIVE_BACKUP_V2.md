@@ -687,3 +687,29 @@ than runaway range accounting.
 The patch should now be treated as validated on srv00. Before rolling it to
 other oVirt hosts, verify the same packaged ovirt-imageio version and preserve
 the packaged measure.py for rollback on each host.
+
+
+### Full VMBitrix validation completed successfully (2026-11-15)
+
+The post-patch FULL backup of `VMBitrix` completed successfully end-to-end.
+
+Result:
+
+- backup ID: `6ed96ee7-7cfa-466a-96be-ed105e7d5bc4`;
+- disk: `3a10c741-698f-4d50-b871-83774ea77026`;
+- virtual size: 100.00 GiB;
+- actual sparse RAW size: 93.00 GiB;
+- disk download time: 1108.1 s;
+- effective average transferred-data rate: ~85.9 MiB/s;
+- total backup operation time including finalization: 1180.5 s;
+- sparse RAW validation with `qemu-img info`: passed;
+- Engine backup finalized successfully;
+- runner exit code: 0.
+
+This completes real-world validation of the RangeList patch on srv00. The same
+workload previously exhibited progressive degradation into the 15-20 MiB/s
+range. After the patch, progress remained roughly around 100 MiB/s through the
+run and the completed transfer averaged ~85.9 MiB/s across 93 GiB of actual
+data.
+
+The patch is therefore considered production-validated on srv00.
