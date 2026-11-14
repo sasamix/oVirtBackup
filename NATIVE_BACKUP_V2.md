@@ -568,3 +568,36 @@ released. The incomplete repository directory had already been deleted.
 A terminal `succeeded` phase here means Engine successfully finished cleanup;
 it does not mean the aborted backup payload is valid, because the partial
 repository data was intentionally removed.
+
+
+### RangeList performance patch applied on srv00 (2026-11-15)
+
+The guarded RangeList patch was successfully applied on `srv00` to:
+
+`/usr/lib64/python3.9/site-packages/ovirt_imageio/_internal/measure.py`
+
+Package version at patch time:
+
+`ovirt-imageio-daemon-2.5.2-1.el9.x86_64`
+
+Original file backup:
+
+`/root/ovirt-imageio-rangelist-backups/20261115_021326/measure.py`
+
+Post-patch validation succeeded:
+
+- Python compilation passed;
+- RangeList overlap/consecutive-range sanity test passed;
+- `ovirt-imageio.service` restarted successfully and is `active`.
+
+Rollback:
+
+```bash
+cp -a '/root/ovirt-imageio-rangelist-backups/20261115_021326/measure.py' '/usr/lib64/python3.9/site-packages/ovirt_imageio/_internal/measure.py'
+python3 -m py_compile '/usr/lib64/python3.9/site-packages/ovirt_imageio/_internal/measure.py'
+systemctl restart ovirt-imageio
+```
+
+Next validation must repeat the same VMBitrix FULL backup without unrelated
+configuration changes and compare sustained throughput and ovirt-imageio CPU
+utilization against the pre-patch run.
