@@ -876,16 +876,36 @@ async function useSelectedForConfig(){
   setNotice(staticText("settings.selected_copied","Selected VM list copied into the form. Press Validate, then Save."),"warn");
 }
 
+function selectionTouches(element){
+  const selection=window.getSelection?.();
+  if(!selection||selection.isCollapsed||selection.rangeCount===0)return false;
+  const range=selection.getRangeAt(0);
+  return element.contains(range.commonAncestorContainer);
+}
+
+function updateLivePre(element,text,{follow=true}={}){
+  // Reassigning textContent destroys text selection even if the text is unchanged.
+  if(element.textContent===text)return false;
+
+  // Do not disturb a selection while the user is copying the log.
+  // The next periodic refresh catches up after selection is released.
+  if(selectionTouches(element))return false;
+
+  const nearBottom=(element.scrollHeight-element.scrollTop-element.clientHeight)<32;
+  element.textContent=text;
+  if(follow&&nearBottom)element.scrollTop=element.scrollHeight;
+  return true;
+}
+
 async function loadLogs(kind=currentLogKind){
   currentLogKind=kind;
   const box=document.getElementById("logBox");
   try{
     const d=await api("api/logs?kind="+encodeURIComponent(kind)+"&lines=600");
     if(kind!==currentLogKind)return;
-    box.textContent=d.lines.join("\n")||staticText("log.no_entries","No log entries");
-    box.scrollTop=box.scrollHeight;
+    updateLivePre(box,d.lines.join("\n")||staticText("log.no_entries","No log entries"));
   }catch(e){
-    if(kind===currentLogKind)box.textContent=e.message;
+    if(kind===currentLogKind)updateLivePre(box,e.message,{follow:false});
   }
 }
 async function loadHealth(){
@@ -984,7 +1004,7 @@ async function loadOperation(){
     if(!op){
       badge.textContent=staticText("state.idle","Idle");badge.className="pill muted";
       meta.textContent=d.lock?.busy?((uiLang==="ru"?"Native lock занят: ":"Native lock busy: ")+(d.lock.holder||"")):staticText("state.no_console_operation","No console operation");
-      log.textContent=staticText("state.no_operation_log","No operation log.");
+      updateLivePre(log,staticText("state.no_operation_log","No operation log."),{follow:false});
       return;
     }
     badge.textContent=localizedStatus(op.status||"unknown");
@@ -993,8 +1013,10 @@ async function loadOperation(){
     meta.textContent=(op.kind||"operation")+" · "+(op.id||"")+
       (md.target_name?" · target="+md.target_name:"")+
       (md.vm_names?.length?" · "+md.vm_names.join(", "):"");
-    log.textContent=(op.log_tail||[]).join("\n")||("State: "+(op.status||"unknown"));
-    log.scrollTop=log.scrollHeight;
+    updateLivePre(
+      log,
+      (op.log_tail||[]).join("\n")||("State: "+(op.status||"unknown"))
+    );
   }catch(e){console.warn(e)}
 }
 
